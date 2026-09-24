@@ -1,0 +1,17 @@
+# Auth bridge
+auth-bridge/node_modules/
+auth-bridge/.wrangler/
+auth-bridge/.dev.vars
+
+# iOS
+ios/.build/
+
+# Android
+android/.gradle/
+android/**/build/
+android/local.properties
+
+# OS / IDE
+.DS_Store
+*.xcuserstate
+.idea/

@@ -9,7 +9,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 - 한 크루는 GitHub Free Organization 하나와 private repository 하나다. 편집·삭제 권한은 Organization Team(운영진 / 멤버)으로만 나눈다. 초대는 이메일로만 보낸다.
 - 화면 문구에 Git, Commit, PR, Issue, Discussion을 노출하지 않는다. 사용자 용어는 자료실, 할 일, 공지, 서식, 스레드 톡이다.
 - 앱 바이너리에 OAuth client secret과 GitHub App private key를 넣지 않는다. 로그인은 시스템 브라우저와 Authorization Code + PKCE(S256)다. 액세스 토큰은 iOS Keychain, Android EncryptedSharedPreferences에만 둔다.
-- 토큰 교환이 client secret을 필수로 요구하면 시크릿을 앱에 넣지 않고, 코드 교환만 수행하는 Cloudflare Worker를 둔다. 사용자 토큰은 그 Worker에 저장하지 않는다.
+- GitHub 토큰 엔드포인트는 `client_secret`을 요구한다. 시크릿은 `auth-bridge` Cloudflare Worker에만 두고, 앱은 코드·verifier를 Worker에 넘겨 교환한다. 사용자 토큰은 Worker에 저장하지 않는다.
 - GitHub, Cloudflare, Firebase의 결제 한도는 $0이며, 포함 한도를 넘기면 사용을 멈춘다. 포함 한도는 §5와 같다.
 - 의결, 회계, 문서의 감사 추적은 GitHub에 남긴다. 로컬 SQLite는 캐시이며 원본이 아니다.
 - 실시간 채팅 엔진을 두지 않는다. 스레드 톡은 댓글과 Reaction의 말풍선 뷰다. 음성과 잡담은 Discord 딥링크만 사용한다.
@@ -21,10 +21,10 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 |------|----------------|------|
 | 크루 | Organization | `org login` |
 | 보관소 | 그 Organization의 private repository 하나 | `owner/repo` |
-| 운영진 / 멤버 | Organization Team | team slug |
+| 운영진 / 멤버 | Organization Team | slug `admins` / `members` |
 | 초대 | Organization invitation | 이메일 |
 
-멤버십이 없는 사용자는 크루 데이터를 읽지 못한다. 운영진 Team에 속한 계정만 편집·삭제·초대를 수행한다.
+멤버십이 없는 사용자는 크루 데이터를 읽지 못한다. `admins` Team에 속한 계정만 편집·삭제·초대를 수행한다. `members`는 읽기와 본인 작성만 한다.
 
 ## 3. 화면과 API
 
@@ -49,9 +49,9 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 ## 4. 인증과 권한
 
 1. 앱이 `code_verifier`를 만들고 `code_challenge`(S256)를 붙인 authorize URL을 시스템 브라우저로 연다.
-2. 리다이렉트 URI로 돌아온 `code`를 `code_verifier`와 함께 교환한다. client secret이 필요하면 §1의 Worker가 교환하고, 토큰은 응답으로 기기에만 전달한다.
+2. 리다이렉트 URI로 돌아온 `code`와 `code_verifier`를 `auth-bridge`에 넘긴다. Worker가 `client_secret`으로 GitHub와 교환하고, 토큰은 응답으로 기기에만 전달한다.
 3. 토큰으로 사용자가 속한 Organization과 Team을 조회한다.
-4. 운영진 Team이면 편집·삭제·초대를 노출한다. 멤버 Team이면 읽기와 본인 작성만 노출한다.
+4. `admins`면 편집·삭제·초대를 노출한다. `members`면 읽기와 본인 작성만 노출한다.
 
 초대는 관리자가 이메일을 입력하면 Organization invitation API로 메일을 보낸다.
 

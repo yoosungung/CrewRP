@@ -4,12 +4,13 @@
 
 클라이언트는 iOS(Swift)와 Android(Kotlin), 로컬 캐시는 SQLite다. 두 앱은 같은 Phase를 따른다.
 
-## Phase 1 — 인증과 캐시
+## Phase 1 — 인증과 캐시 (진행 중)
 
 - 시스템 브라우저 OAuth PKCE(S256) 로그인.
-- client secret 없이 토큰 교환이 되는지 확인한다. 필수라면 코드 교환 전용 Cloudflare Worker를 두고, 시크릿은 Worker에만 둔다.
-- Organization 선택과 운영진/멤버 Team 식별.
+- `auth-bridge` Cloudflare Worker로 코드 교환. 시크릿은 Worker에만 둔다.
+- Organization 선택과 `admins` / `members` Team 식별.
 - SQLite `cache_entry`(REST ETag)와 `graphql_cursor`. 토큰은 Keychain / EncryptedSharedPreferences.
+- 완료 기준: iOS·Android 코어 단위 테스트 통과, Worker 교환 테스트 통과.
 
 ## Phase 2 — 할 일, 자료, 공지, 서식
 
