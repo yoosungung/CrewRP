@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -21,6 +23,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,16 +38,22 @@ import app.crewrp.core.AuthBridgeClient
 import app.crewrp.core.AuthConfig
 import app.crewrp.core.AuthFlow
 import app.crewrp.core.CacheStore
+import app.crewrp.core.CrewRepo
 import app.crewrp.core.DiscordDeepLink
+import app.crewrp.core.DocsClient
+import app.crewrp.core.ETagRESTClient
 import app.crewrp.core.GitHubMembershipClient
-import app.crewrp.core.Organization
+import app.crewrp.core.Notice
 import app.crewrp.core.Session
+import app.crewrp.core.ThreadMessage
 import app.crewrp.core.TokenStore
 import app.crewrp.core.UrlHttpTransport
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.concurrent.thread
+import org.json.JSONArray
+import org.json.JSONObject
 
 class EncryptedPrefsTokenStore(context: Context) : TokenStore {
     private val prefs = EncryptedSharedPreferences.create(
@@ -68,7 +77,9 @@ class EncryptedPrefsTokenStore(context: Context) : TokenStore {
 
 class MainActivity : ComponentActivity() {
     private lateinit var flow: AuthFlow
-    private var onOrgs: ((List<Organization>) -> Unit)? = null
+    private lateinit var tokens: TokenStore
+    private lateinit var cache: CacheStore
+    private var onRepos: ((List<CrewRepo>) -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,25 +90,27 @@ class MainActivity : ComponentActivity() {
             redirectUri = "crewrp://oauth/callback",
             authBridgeBaseUrl = BuildConfig.AUTH_BRIDGE_URL,
         )
+        tokens = EncryptedPrefsTokenStore(this)
+        cache = CacheStore(dbPath)
         flow = AuthFlow(
             config,
             AuthBridgeClient(config.authBridgeBaseUrl, transport),
             GitHubMembershipClient(transport),
-            EncryptedPrefsTokenStore(this),
-            CacheStore(dbPath),
+            tokens,
+            cache,
         )
 
         setContent {
-            var orgs by remember { mutableStateOf<List<Organization>>(emptyList()) }
-            var session by remember { mutableStateOf<Session?>(null) }
+            var repos by remember { mutableStateOf<List<CrewRepo>>(emptyList()) }
+            var session by remember { mutableStateOf(cache.session()) }
             var error by remember { mutableStateOf<String?>(null) }
-            onOrgs = { orgs = it }
+            onRepos = { repos = it }
 
             MaterialTheme {
                 when {
-                    session != null -> MainTabs(session!!)
-                    orgs.isNotEmpty() -> OrgPicker(orgs) { org ->
-                        runCatching { flow.selectOrganization(org) }
+                    session != null -> MainTabs(session!!, tokens, cache)
+                    repos.isNotEmpty() -> RepoPicker(repos) { repo ->
+                        runCatching { flow.registerCrew(repo) }
                             .onSuccess { session = it }
                             .onFailure { error = it.message }
                     }
@@ -121,15 +134,87 @@ class MainActivity : ComponentActivity() {
         val data = intent?.data?.toString() ?: return
         if (!data.startsWith("crewrp://oauth/callback")) return
         runCatching { flow.completeLogin(data) }
-            .onSuccess { onOrgs?.invoke(it) }
+            .onSuccess { onRepos?.invoke(it) }
+            .onFailure { /* surfaced next login */ }
     }
 }
 
 @Composable
-private fun MainTabs(session: Session) {
+private fun MainTabs(session: Session, tokens: TokenStore, cache: CacheStore) {
     var tab by remember { mutableIntStateOf(0) }
+    var doc by remember { mutableStateOf("불러오는 중…") }
+    var notices by remember { mutableStateOf<List<Notice>>(emptyList()) }
+    var threads by remember { mutableStateOf<List<ThreadMessage>>(emptyList()) }
     val labels = listOf("홈", "할 일", "자료실", "소통")
     val context = LocalContext.current
+
+    LaunchedEffect(session.repo) {
+        val token = tokens.loadAccessToken() ?: return@LaunchedEffect
+        val parts = session.repo.split("/")
+        if (parts.size != 2) return@LaunchedEffect
+        val owner = parts[0]
+        val repo = parts[1]
+        thread {
+            runCatching {
+                val transport = UrlHttpTransport()
+                val text = DocsClient(ETagRESTClient(transport, cache))
+                    .fetchMarkdown(owner, repo, "docs/README.md", token)
+                    .content
+                val discussionBody = transport.exchange(
+                    "POST",
+                    "https://api.github.com/graphql",
+                    mapOf(
+                        "Authorization" to "Bearer $token",
+                        "Content-Type" to "application/json",
+                    ),
+                    """{"query":"query{repository(owner:\"$owner\",name:\"$repo\"){discussions(first:5){nodes{id title body}}}}"}""",
+                ).body
+                val nodes = JSONObject(discussionBody)
+                    .optJSONObject("data")
+                    ?.optJSONObject("repository")
+                    ?.optJSONObject("discussions")
+                    ?.optJSONArray("nodes") ?: JSONArray()
+                val loaded = buildList {
+                    for (i in 0 until nodes.length()) {
+                        val n = nodes.getJSONObject(i)
+                        add(Notice(n.getString("id"), n.getString("title"), n.optString("body")))
+                    }
+                }
+                val commentsBody = transport.exchange(
+                    "GET",
+                    "https://api.github.com/repos/$owner/$repo/issues/1/comments",
+                    mapOf(
+                        "Authorization" to "Bearer $token",
+                        "Accept" to "application/vnd.github+json",
+                    ),
+                    null,
+                ).body
+                val comments = JSONArray(if (commentsBody.isBlank()) "[]" else commentsBody)
+                val msgs = buildList {
+                    for (i in 0 until comments.length()) {
+                        val c = comments.getJSONObject(i)
+                        add(
+                            ThreadMessage(
+                                c.getLong("id").toString(),
+                                c.getString("body"),
+                                c.getJSONObject("user").getString("login"),
+                            ),
+                        )
+                    }
+                }
+                (context as ComponentActivity).runOnUiThread {
+                    doc = text
+                    notices = loaded
+                    threads = msgs
+                }
+            }.onFailure {
+                (context as ComponentActivity).runOnUiThread {
+                    doc = "자료를 불러오지 못했습니다: ${it.message}"
+                }
+            }
+        }
+    }
+
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -150,18 +235,21 @@ private fun MainTabs(session: Session) {
                     Text("홈", style = MaterialTheme.typography.headlineSmall)
                     Text("크루: ${session.org}")
                     Text("역할: ${session.teamRole}")
+                    Text("저장소: ${session.repo}")
+                    Text("공지", style = MaterialTheme.typography.titleMedium)
+                    notices.take(3).forEach { Text("· ${it.title}") }
                 }
                 1 -> {
                     Text("할 일", style = MaterialTheme.typography.headlineSmall)
-                    Text("칸반·마감일 목록은 Projects v2 클라이언트와 연결됩니다.")
+                    Text("할 일은 Projects 연결 후 칸반에 표시됩니다.")
                 }
                 2 -> {
                     Text("자료실", style = MaterialTheme.typography.headlineSmall)
-                    Text("/docs 마크다운을 앱에서 렌더합니다.")
+                    Text(doc, modifier = Modifier.verticalScroll(rememberScrollState()))
                 }
                 else -> {
                     Text("소통", style = MaterialTheme.typography.headlineSmall)
-                    Text("스레드 톡 · 알림")
+                    threads.forEach { Text("${it.author}: ${it.body}") }
                     Button(onClick = {
                         val url = DiscordDeepLink.voiceChannelUrl(
                             BuildConfig.DISCORD_SERVER_ID,
@@ -207,12 +295,16 @@ private fun LoginScreen(error: String?, onLogin: () -> Unit) {
 }
 
 @Composable
-private fun OrgPicker(orgs: List<Organization>, onSelect: (Organization) -> Unit) {
+private fun RepoPicker(repos: List<CrewRepo>, onSelect: (CrewRepo) -> Unit) {
     Column(Modifier.fillMaxSize().padding(24.dp)) {
-        Text("크루 선택", style = MaterialTheme.typography.headlineSmall)
+        Text("크루 등록", style = MaterialTheme.typography.headlineSmall)
+        Text("관리 권한이 있는 저장소를 골라 크루를 시작합니다.")
         LazyColumn {
-            items(orgs) { org ->
-                Text(org.login, modifier = Modifier.clickable { onSelect(org) }.padding(16.dp))
+            items(repos) { repo ->
+                Text(
+                    repo.fullName,
+                    modifier = Modifier.clickable { onSelect(repo) }.padding(16.dp),
+                )
             }
         }
     }

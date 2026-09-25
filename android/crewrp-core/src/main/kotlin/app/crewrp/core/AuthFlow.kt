@@ -4,7 +4,6 @@ data class AuthConfig(
     val clientId: String,
     val redirectUri: String,
     val authBridgeBaseUrl: String,
-    val defaultRepoName: String = "crew",
 )
 
 data class LoginChallenge(
@@ -34,7 +33,7 @@ class AuthFlow(
         return LoginChallenge(url, state, pkce.verifier).also { pending = it }
     }
 
-    fun completeLogin(callbackUrl: String): List<Organization> {
+    fun completeLogin(callbackUrl: String): List<CrewRepo> {
         val query = URIQuery.parse(callbackUrl)
         val pending = pending ?: error("missing pending login")
         require(query["state"] == pending.state) { "state mismatch" }
@@ -42,15 +41,15 @@ class AuthFlow(
         val token = bridge.exchange(code, pending.codeVerifier, config.redirectUri)
         tokens.saveAccessToken(token.accessToken)
         this.pending = null
-        val orgs = membership.listOrganizations(token.accessToken)
-        require(orgs.isNotEmpty()) { "no organizations" }
-        return orgs
+        val repos = membership.listRegistrableRepos(token.accessToken)
+        require(repos.isNotEmpty()) { "no registrable repos" }
+        return repos
     }
 
-    fun selectOrganization(org: Organization): Session {
+    fun registerCrew(repo: CrewRepo): Session {
         val token = tokens.loadAccessToken() ?: error("missing token")
-        val role = membership.resolveRole(org.login, token)
-        val session = Session(org.login, "${org.login}/${config.defaultRepoName}", role)
+        val role = membership.resolveRole(repo.owner, token, isRepoAdmin = true)
+        val session = Session(repo.owner, repo.fullName, role)
         cache.putSession(session)
         return session
     }

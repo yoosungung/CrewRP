@@ -14,7 +14,7 @@ struct CrewRPApp: App {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var organizations: [Organization] = []
+    @Published var registrableRepos: [CrewRepo] = []
     @Published var session: Session?
     @Published var errorMessage: String?
     @Published var selectedTab = 0
@@ -64,7 +64,7 @@ final class AppModel: ObservableObject {
                 }
                 guard let callback else { return }
                 do {
-                    self.organizations = try await self.flow.completeLogin(callbackURL: callback)
+                    self.registrableRepos = try await self.flow.completeLogin(callbackURL: callback)
                 } catch {
                     self.errorMessage = error.localizedDescription
                 }
@@ -76,10 +76,10 @@ final class AppModel: ObservableObject {
         session.start()
     }
 
-    func select(_ org: Organization) {
+    func register(_ repo: CrewRepo) {
         Task {
             do {
-                session = try await flow.selectOrganization(org)
+                session = try await flow.registerCrew(repo)
                 await refreshHomeData()
             } catch {
                 errorMessage = error.localizedDescription
@@ -216,11 +216,11 @@ struct RootView: View {
                     .tag(3)
                 }
                 .task { await model.refreshHomeData() }
-            } else if !model.organizations.isEmpty {
-                List(model.organizations, id: \.id) { org in
-                    Button(org.login) { model.select(org) }
+            } else if !model.registrableRepos.isEmpty {
+                List(model.registrableRepos) { repo in
+                    Button(repo.fullName) { model.register(repo) }
                 }
-                .navigationTitle("크루 선택")
+                .navigationTitle("크루 등록")
             } else {
                 VStack(spacing: 16) {
                     Text("CrewRP").font(.largeTitle)

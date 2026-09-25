@@ -136,16 +136,21 @@ struct AuthBridgeClientTests {
 
 @Suite("GitHubMembershipClient")
 struct GitHubMembershipClientTests {
-    @Test("lists orgs and resolves admins role")
-    func resolveAdmin() async throws {
+    @Test("lists registrable repos and resolves admins role")
+    func registrableAndAdmin() async throws {
         let transport = MockHTTPTransport()
         transport.handler = { request in
-            let path = request.url!.path
-            if path.hasSuffix("/user/orgs") {
-                let data = Data(#"[{"login":"crew","id":1}]"#.utf8)
+            let path = request.url!.absoluteString
+            if path.contains("/user/repos") {
+                let data = Data(#"""
+                [{"name":"box","full_name":"crew/box","private":true,
+                  "permissions":{"admin":true},"owner":{"login":"crew"}},
+                 {"name":"public","full_name":"crew/public","private":false,
+                  "permissions":{"admin":true},"owner":{"login":"crew"}}]
+                """#.utf8)
                 return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             }
-            if path.hasSuffix("/user/teams") {
+            if path.hasSuffix("/user/teams") || request.url!.path.hasSuffix("/user/teams") {
                 let data = Data(#"""
                 [{"id":9,"slug":"admins","name":"Admins","organization":{"login":"crew"}},
                  {"id":10,"slug":"members","name":"Members","organization":{"login":"other"}}]
@@ -156,28 +161,31 @@ struct GitHubMembershipClientTests {
             throw GitHubAPIError.invalidResponse
         }
         let client = GitHubMembershipClient(transport: transport, apiBase: URL(string: "https://api.github.com")!)
-        let orgs = try await client.listOrganizations(token: "t")
-        #expect(orgs.map(\.login) == ["crew"])
-        #expect(try await client.resolveRole(org: "crew", token: "t") == .admin)
+        let repos = try await client.listRegistrableRepos(token: "t")
+        #expect(repos.map(\.fullName) == ["crew/box"])
+        #expect(try await client.resolveRole(owner: "crew", token: "t", isRepoAdmin: true) == .admin)
     }
 }
 
 @Suite("AuthFlow")
 struct AuthFlowTests {
-    @Test("completes login and selects organization")
-    func loginAndSelect() async throws {
+    @Test("completes login and registers crew repo")
+    func loginAndRegister() async throws {
         let transport = MockHTTPTransport()
         transport.handler = { request in
-            let url = request.url!.absoluteString
-            if url.contains("/oauth/token") {
+            let path = request.url!.absoluteString
+            if path.hasSuffix("/oauth/token") || request.url!.path.hasSuffix("/oauth/token") {
                 let data = Data(#"{"access_token":"gho_ok","token_type":"bearer"}"#.utf8)
                 return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             }
-            if url.contains("/user/orgs") {
-                let data = Data(#"[{"login":"crew","id":1}]"#.utf8)
+            if path.contains("/user/repos") {
+                let data = Data(#"""
+                [{"name":"box","full_name":"crew/box","private":true,
+                  "permissions":{"admin":true},"owner":{"login":"crew"}}]
+                """#.utf8)
                 return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             }
-            if url.contains("/user/teams") {
+            if request.url!.path.hasSuffix("/user/teams") {
                 let data = Data(#"[{"id":9,"slug":"members","name":"Members","organization":{"login":"crew"}}]"#.utf8)
                 return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             }
@@ -199,13 +207,49 @@ struct AuthFlowTests {
         )
         let challenge = flow.beginLogin()
         let callback = URL(string: "crewrp://oauth/callback?code=abc&state=\(challenge.state)")!
-        let orgs = try await flow.completeLogin(callbackURL: callback)
-        #expect(orgs.map(\.login) == ["crew"])
+        let repos = try await flow.completeLogin(callbackURL: callback)
+        #expect(repos.map(\.fullName) == ["crew/box"])
         #expect(try tokens.loadAccessToken() == "gho_ok")
-        let session = try await flow.selectOrganization(orgs[0])
-        #expect(session.repo == "crew/crew")
+        let session = try await flow.registerCrew(repos[0])
+        #expect(session.repo == "crew/box")
         #expect(session.teamRole == .member)
         #expect(try cache.session()?.org == "crew")
+    }
+
+    @Test("personal admin repo registers as owner admin")
+    func personalAdminRepo() async throws {
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            let path = request.url!.absoluteString
+            if request.url!.path.hasSuffix("/oauth/token") {
+                return (Data(#"{"access_token":"gho_ok"}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            if path.contains("/user/repos") {
+                let data = Data(#"""
+                [{"name":"study","full_name":"alice/study","private":true,
+                  "permissions":{"admin":true},"owner":{"login":"alice"}}]
+                """#.utf8)
+                return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            if request.url!.path.hasSuffix("/user/teams") {
+                return (Data("[]".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            throw GitHubAPIError.invalidResponse
+        }
+        let cache = try CacheStore(path: ":memory:")
+        let flow = AuthFlow(
+            config: AuthConfig(clientID: "cid", redirectURI: "crewrp://oauth/callback", authBridgeBaseURL: URL(string: "https://auth.example")!),
+            bridge: AuthBridgeClient(baseURL: URL(string: "https://auth.example")!, transport: transport),
+            membership: GitHubMembershipClient(transport: transport),
+            tokens: InMemoryTokenStore(),
+            cache: cache
+        )
+        let challenge = flow.beginLogin()
+        let repos = try await flow.completeLogin(callbackURL: URL(string: "crewrp://oauth/callback?code=x&state=\(challenge.state)")!)
+        #expect(repos.map(\.fullName) == ["alice/study"])
+        let session = try await flow.registerCrew(repos[0])
+        #expect(session.repo == "alice/study")
+        #expect(session.teamRole == .admin)
     }
 }
 
@@ -248,6 +292,55 @@ struct ETagRESTClientTests {
         let result = try await client.get(url: URL(string: "https://api.github.com/repos/o/r/contents/docs/a.md")!, token: "t")
         #expect(result.fromCache)
         #expect(String(data: result.body, encoding: .utf8) == #"{"ok":1}"#)
+    }
+}
+
+@Suite("CrewRegistrationFixtures")
+struct CrewRegistrationFixtureTests {
+    @Test("expense form seed matches parser contract")
+    func expenseForm() {
+        let yaml = """
+        name: 지출 결의서
+        description: 영수증을 첨부한 지출 요청
+        body:
+          - type: input
+            id: amount
+            attributes:
+              label: 금액
+            validations:
+              required: true
+          - type: textarea
+            id: reason
+            attributes:
+              label: 사유
+            validations:
+              required: true
+        """
+        let form = IssueFormParser.parse(yaml)
+        #expect(form.name == "지출 결의서")
+        #expect(form.fields.map(\.id) == ["amount", "reason"])
+        #expect(form.fields.allSatisfy { $0.required })
+    }
+
+    @Test("docs README fetch for registered repo")
+    func docsFetch() async throws {
+        let markdown = "# 자료실\n"
+        let encoded = Data(markdown.utf8).base64EncodedString()
+        let cache = try CacheStore(path: ":memory:")
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            #expect(request.url!.path.hasSuffix("/repos/crew/box/contents/docs/README.md"))
+            let payload: [String: Any] = [
+                "path": "docs/README.md",
+                "content": encoded,
+                "encoding": "base64",
+            ]
+            let body = try JSONSerialization.data(withJSONObject: payload)
+            return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["ETag": "\"d1\""])!)
+        }
+        let doc = try await DocsClient(rest: ETagRESTClient(transport: transport, cache: cache))
+            .fetchMarkdown(owner: "crew", repo: "box", path: "docs/README.md", token: "t")
+        #expect(doc.content.contains("자료실"))
     }
 }
 

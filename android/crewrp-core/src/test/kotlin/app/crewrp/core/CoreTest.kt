@@ -112,11 +112,17 @@ class AuthBridgeClientTest {
 
 class GitHubMembershipClientTest {
     @Test
-    fun listsOrgsAndResolvesAdmin() {
+    fun listsRegistrableReposAndResolvesAdmin() {
         val transport = HttpTransport { _, url, _, _ ->
             when {
-                url.endsWith("/user/orgs") ->
-                    HttpResult(200, """[{"login":"crew","id":1}]""")
+                url.contains("/user/repos") ->
+                    HttpResult(
+                        200,
+                        """[{"name":"box","full_name":"crew/box","private":true,
+                            "permissions":{"admin":true},"owner":{"login":"crew"}},
+                           {"name":"public","full_name":"crew/public","private":false,
+                            "permissions":{"admin":true},"owner":{"login":"crew"}}]""",
+                    )
                 url.endsWith("/user/teams") ->
                     HttpResult(
                         200,
@@ -127,20 +133,24 @@ class GitHubMembershipClientTest {
             }
         }
         val client = GitHubMembershipClient(transport)
-        assertEquals(listOf("crew"), client.listOrganizations("t").map { it.login })
-        assertEquals(TeamRole.ADMIN, client.resolveRole("crew", "t"))
+        assertEquals(listOf("crew/box"), client.listRegistrableRepos("t").map { it.fullName })
+        assertEquals(TeamRole.ADMIN, client.resolveRole("crew", "t", isRepoAdmin = true))
     }
 }
 
 class AuthFlowTest {
     @Test
-    fun loginAndSelect() {
+    fun loginAndRegisterCrew() {
         val transport = HttpTransport { method, url, _, _ ->
             when {
                 url.endsWith("/oauth/token") ->
                     HttpResult(200, """{"access_token":"gho_ok","token_type":"bearer"}""")
-                url.endsWith("/user/orgs") ->
-                    HttpResult(200, """[{"login":"crew","id":1}]""")
+                url.contains("/user/repos") ->
+                    HttpResult(
+                        200,
+                        """[{"name":"box","full_name":"crew/box","private":true,
+                            "permissions":{"admin":true},"owner":{"login":"crew"}}]""",
+                    )
                 url.endsWith("/user/teams") ->
                     HttpResult(200, """[{"id":9,"slug":"members","name":"Members","organization":{"login":"crew"}}]""")
                 else -> error("unexpected $method $url")
@@ -157,13 +167,46 @@ class AuthFlowTest {
                 cache,
             )
             val challenge = flow.beginLogin()
-            val orgs = flow.completeLogin("crewrp://oauth/callback?code=abc&state=${challenge.state}")
-            assertEquals(listOf("crew"), orgs.map { it.login })
+            val repos = flow.completeLogin("crewrp://oauth/callback?code=abc&state=${challenge.state}")
+            assertEquals(listOf("crew/box"), repos.map { it.fullName })
             assertEquals("gho_ok", tokens.loadAccessToken())
-            val session = flow.selectOrganization(orgs[0])
-            assertEquals("crew/crew", session.repo)
+            val session = flow.registerCrew(repos[0])
+            assertEquals("crew/box", session.repo)
             assertEquals(TeamRole.MEMBER, session.teamRole)
             assertEquals("crew", cache.session()?.org)
+        }
+    }
+
+    @Test
+    fun personalAdminRepoRegistersAsOwnerAdmin() {
+        val transport = HttpTransport { _, url, _, _ ->
+            when {
+                url.endsWith("/oauth/token") ->
+                    HttpResult(200, """{"access_token":"gho_ok"}""")
+                url.contains("/user/repos") ->
+                    HttpResult(
+                        200,
+                        """[{"name":"study","full_name":"alice/study","private":true,
+                            "permissions":{"admin":true},"owner":{"login":"alice"}}]""",
+                    )
+                url.endsWith("/user/teams") -> HttpResult(200, "[]")
+                else -> error("unexpected $url")
+            }
+        }
+        CacheStore(":memory:").use { cache ->
+            val flow = AuthFlow(
+                AuthConfig("cid", "crewrp://oauth/callback", "https://auth.example"),
+                AuthBridgeClient("https://auth.example", transport),
+                GitHubMembershipClient(transport),
+                InMemoryTokenStore(),
+                cache,
+            )
+            val challenge = flow.beginLogin()
+            val repos = flow.completeLogin("crewrp://oauth/callback?code=x&state=${challenge.state}")
+            assertEquals(listOf("alice/study"), repos.map { it.fullName })
+            val session = flow.registerCrew(repos[0])
+            assertEquals("alice/study", session.repo)
+            assertEquals(TeamRole.ADMIN, session.teamRole)
         }
     }
 }
@@ -201,5 +244,40 @@ class Phase2Test {
             ),
         )
         assertEquals(listOf("2", "1"), sorted.map { it.id })
+    }
+
+    @Test
+    fun expenseFormAndDocs() {
+        val form = IssueFormParser.parse(
+            """
+            name: 지출 결의서
+            body:
+              - type: input
+                id: amount
+                attributes:
+                  label: 금액
+                validations:
+                  required: true
+              - type: textarea
+                id: reason
+                attributes:
+                  label: 사유
+                validations:
+                  required: true
+            """.trimIndent(),
+        )
+        assertEquals(listOf("amount", "reason"), form.fields.map { it.id })
+
+        val markdown = "# 자료실\n"
+        val encoded = java.util.Base64.getEncoder().encodeToString(markdown.toByteArray())
+        CacheStore(":memory:").use { cache ->
+            val transport = HttpTransport { _, url, _, _ ->
+                assertTrue(url.endsWith("/repos/crew/box/contents/docs/README.md"))
+                HttpResult(200, """{"path":"docs/README.md","content":"$encoded","encoding":"base64"}""")
+            }
+            val doc = DocsClient(ETagRESTClient(transport, cache))
+                .fetchMarkdown("crew", "box", "docs/README.md", "t")
+            assertTrue(doc.content.contains("자료실"))
+        }
     }
 }

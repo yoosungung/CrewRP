@@ -4,18 +4,15 @@ public struct AuthConfig: Sendable, Equatable {
     public var clientID: String
     public var redirectURI: String
     public var authBridgeBaseURL: URL
-    public var defaultRepoName: String
 
     public init(
         clientID: String,
         redirectURI: String,
-        authBridgeBaseURL: URL,
-        defaultRepoName: String = "crew"
+        authBridgeBaseURL: URL
     ) {
         self.clientID = clientID
         self.redirectURI = redirectURI
         self.authBridgeBaseURL = authBridgeBaseURL
-        self.defaultRepoName = defaultRepoName
     }
 }
 
@@ -28,7 +25,7 @@ public struct LoginChallenge: Sendable, Equatable {
 public enum AuthFlowError: Error, Equatable {
     case stateMismatch
     case missingCode
-    case noOrganizations
+    case noRegistrableRepos
 }
 
 public final class AuthFlow: @unchecked Sendable {
@@ -37,7 +34,6 @@ public final class AuthFlow: @unchecked Sendable {
     private let membership: GitHubMembershipClient
     private let tokens: any TokenStore
     private let cache: CacheStore
-
     private var pending: LoginChallenge?
 
     public init(
@@ -68,7 +64,8 @@ public final class AuthFlow: @unchecked Sendable {
         return challenge
     }
 
-    public func completeLogin(callbackURL: URL) async throws -> [Organization] {
+    /// Exchanges the OAuth code and returns private repos the user can register as a crew.
+    public func completeLogin(callbackURL: URL) async throws -> [CrewRepo] {
         let items = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
         var map: [String: String] = [:]
         for item in items {
@@ -88,19 +85,15 @@ public final class AuthFlow: @unchecked Sendable {
         try tokens.saveAccessToken(token.accessToken)
         self.pending = nil
 
-        let orgs = try await membership.listOrganizations(token: token.accessToken)
-        guard !orgs.isEmpty else { throw AuthFlowError.noOrganizations }
-        return orgs
+        let repos = try await membership.listRegistrableRepos(token: token.accessToken)
+        guard !repos.isEmpty else { throw AuthFlowError.noRegistrableRepos }
+        return repos
     }
 
-    public func selectOrganization(_ org: Organization) async throws -> Session {
+    public func registerCrew(_ repo: CrewRepo) async throws -> Session {
         guard let token = try tokens.loadAccessToken() else { throw AuthFlowError.missingCode }
-        let role = try await membership.resolveRole(org: org.login, token: token)
-        let session = Session(
-            org: org.login,
-            repo: "\(org.login)/\(config.defaultRepoName)",
-            teamRole: role
-        )
+        let role = try await membership.resolveRole(owner: repo.owner, token: token, isRepoAdmin: true)
+        let session = Session(org: repo.owner, repo: repo.fullName, teamRole: role)
         try cache.putSession(session)
         return session
     }
