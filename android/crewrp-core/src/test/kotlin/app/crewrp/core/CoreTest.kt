@@ -84,3 +84,122 @@ class CacheStoreTest {
         }
     }
 }
+
+class TokenStoreTest {
+    @Test
+    fun memoryRoundTrip() {
+        val store = InMemoryTokenStore()
+        store.saveAccessToken("gho_x")
+        assertEquals("gho_x", store.loadAccessToken())
+        store.clearAccessToken()
+        assertEquals(null, store.loadAccessToken())
+    }
+}
+
+class AuthBridgeClientTest {
+    @Test
+    fun exchangesCode() {
+        val transport = HttpTransport { method, url, _, body ->
+            assertEquals("POST", method)
+            assertTrue(url.endsWith("/oauth/token"))
+            assertTrue(body!!.contains("\"code\":\"abc\""))
+            HttpResult(200, """{"access_token":"gho_ok","token_type":"bearer","scope":"read:org"}""")
+        }
+        val client = AuthBridgeClient("https://auth.example", transport)
+        assertEquals("gho_ok", client.exchange("abc", "ver", "crewrp://oauth/callback").accessToken)
+    }
+}
+
+class GitHubMembershipClientTest {
+    @Test
+    fun listsOrgsAndResolvesAdmin() {
+        val transport = HttpTransport { _, url, _, _ ->
+            when {
+                url.endsWith("/user/orgs") ->
+                    HttpResult(200, """[{"login":"crew","id":1}]""")
+                url.endsWith("/user/teams") ->
+                    HttpResult(
+                        200,
+                        """[{"id":9,"slug":"admins","name":"Admins","organization":{"login":"crew"}},
+                           {"id":10,"slug":"members","name":"Members","organization":{"login":"other"}}]""",
+                    )
+                else -> error("unexpected $url")
+            }
+        }
+        val client = GitHubMembershipClient(transport)
+        assertEquals(listOf("crew"), client.listOrganizations("t").map { it.login })
+        assertEquals(TeamRole.ADMIN, client.resolveRole("crew", "t"))
+    }
+}
+
+class AuthFlowTest {
+    @Test
+    fun loginAndSelect() {
+        val transport = HttpTransport { method, url, _, _ ->
+            when {
+                url.endsWith("/oauth/token") ->
+                    HttpResult(200, """{"access_token":"gho_ok","token_type":"bearer"}""")
+                url.endsWith("/user/orgs") ->
+                    HttpResult(200, """[{"login":"crew","id":1}]""")
+                url.endsWith("/user/teams") ->
+                    HttpResult(200, """[{"id":9,"slug":"members","name":"Members","organization":{"login":"crew"}}]""")
+                else -> error("unexpected $method $url")
+            }
+        }
+        CacheStore(":memory:").use { cache ->
+            val tokens = InMemoryTokenStore()
+            val config = AuthConfig("cid", "crewrp://oauth/callback", "https://auth.example")
+            val flow = AuthFlow(
+                config,
+                AuthBridgeClient(config.authBridgeBaseUrl, transport),
+                GitHubMembershipClient(transport),
+                tokens,
+                cache,
+            )
+            val challenge = flow.beginLogin()
+            val orgs = flow.completeLogin("crewrp://oauth/callback?code=abc&state=${challenge.state}")
+            assertEquals(listOf("crew"), orgs.map { it.login })
+            assertEquals("gho_ok", tokens.loadAccessToken())
+            val session = flow.selectOrganization(orgs[0])
+            assertEquals("crew/crew", session.repo)
+            assertEquals(TeamRole.MEMBER, session.teamRole)
+            assertEquals("crew", cache.session()?.org)
+        }
+    }
+}
+
+class Phase2Test {
+    @Test
+    fun parsesIssueFormAndDiscordLink() {
+        val form = IssueFormParser.parse(
+            """
+            name: 지출 결의서
+            body:
+              - type: input
+                id: amount
+                attributes:
+                  label: 금액
+                validations:
+                  required: true
+            """.trimIndent(),
+        )
+        assertEquals("지출 결의서", form.name)
+        assertEquals("amount", form.fields[0].id)
+        assertEquals(true, form.fields[0].required)
+        assertEquals(
+            "https://discord.com/channels/1/2",
+            DiscordDeepLink.voiceChannelUrl("1", "2"),
+        )
+    }
+
+    @Test
+    fun sortsTasksByDueDate() {
+        val sorted = ProjectsClient(HttpTransport { _, _, _, _ -> error("no") }).sortedByDueDate(
+            listOf(
+                TaskCard("1", "b", "할 일", "2026-09-30"),
+                TaskCard("2", "a", "할 일", "2026-09-01"),
+            ),
+        )
+        assertEquals(listOf("2", "1"), sorted.map { it.id })
+    }
+}

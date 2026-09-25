@@ -1,0 +1,14 @@
+{
+  "name": "crewrp-push-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.0.9",
+    "wrangler": "4.35.0"
+  }
+}

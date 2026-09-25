@@ -14,7 +14,7 @@ This file provides guidance to AI coding assistants (Claude Code, Codex, Gemini,
 | `ARCHITECTURE.md` | **계약사항(불변 규칙)** + 컴포넌트 *간* 인터페이스 형태(스키마·레이아웃·이벤트) | 루트 |
 | `README.md` | 저장소 방문자용 소개 + 로컬 quickstart | 루트 |
 | `ROADMAP.md` | 수행 계획(마일스톤·순서·미결정 항목) | 루트 |
-| `<comp>/DESIGN.md` | 컴포넌트 *내부* 설계 + `## Commands` (빌드/실행/테스트) | `ios/`, `android/`, `auth-bridge/` |
+| `<comp>/DESIGN.md` | 컴포넌트 *내부* 설계 + `## Commands` (빌드/실행/테스트) | `ios/`, `android/`, `auth-bridge/`, `push-bridge/` |
  
 규칙:
  
@@ -35,5 +35,5 @@ This file provides guidance to AI coding assistants (Claude Code, Codex, Gemini,
  
 ## 3. Status
  
-Phase 1 진행 중. 클라이언트는 iOS(Swift)·Android(Kotlin), 로컬 캐시는 SQLite, 토큰 교환은 `auth-bridge`. 계약은 [ARCHITECTURE.md](ARCHITECTURE.md), 순서는 [ROADMAP.md](ROADMAP.md).
+Phase 1–3 구현 진행 중. 코어·Worker·앱 셸 있음. OAuth/FCM/Discord 실키 E2E는 설정 후. 계약은 [ARCHITECTURE.md](ARCHITECTURE.md), 순서는 [ROADMAP.md](ROADMAP.md).
 

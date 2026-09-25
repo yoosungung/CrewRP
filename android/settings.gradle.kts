@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "CrewRP"
 include(":crewrp-core")
+include(":app")

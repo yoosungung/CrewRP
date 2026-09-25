@@ -1,7 +1,7 @@
-# Auth bridge
-auth-bridge/node_modules/
-auth-bridge/.wrangler/
-auth-bridge/.dev.vars
+# push-bridge/
+push-bridge/node_modules/
+push-bridge/.wrangler/
+push-bridge/.dev.vars
 
 # iOS
 ios/.build/

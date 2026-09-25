@@ -1,10 +1,12 @@
 # android
 
-Android 클라이언트. Phase 1은 JVM 라이브러리 `crewrp-core`(PKCE, TeamRole, SQLite 캐시)다. UI 앱은 코어가 안정된 뒤 붙인다. 계약은 iOS `CrewRPCore`와 같다.
+Android 클라이언트. `crewrp-core` + `:app` 셸.
 
 ## Commands
 
 ```bash
 cd android
 ./gradlew :crewrp-core:test
+./gradlew :app:assembleDebug
+# BuildConfig GITHUB_CLIENT_ID, AUTH_BRIDGE_URL 설정 후 설치
 ```
