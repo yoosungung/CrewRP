@@ -16,4 +16,9 @@ xcodebuild -project CrewRPApp.xcodeproj -scheme CrewRP \
 cd android && ./gradlew :crewrp-core:test :app:assembleDebug
 ```
 
-실기기 OAuth는 GitHub OAuth App `client_id`와 `auth-bridge` 배포 URL을 Info.plist / BuildConfig에 넣은 뒤 시뮬레이터에서 로그인한다.
+실기기 OAuth는 GitHub OAuth App `client_id`/`client_secret`을 auth-bridge 시크릿에 넣고, 앱 Info.plist / BuildConfig의 `GitHubClientID`를 채운 뒤 시뮬레이터에서 로그인한다.
+
+배포된 Worker:
+- auth: https://crewrp-auth-bridge.candydate.workers.dev ([auth-bridge/DESIGN.md](auth-bridge/DESIGN.md))
+- push: https://crewrp-push-bridge.candydate.workers.dev ([push-bridge/DESIGN.md](push-bridge/DESIGN.md))
+

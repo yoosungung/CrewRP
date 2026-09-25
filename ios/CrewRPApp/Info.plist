@@ -34,11 +34,11 @@
 		</dict>
 	</array>
 	<key>GitHubClientID</key>
-	<string>REPLACE_ME</string>
+	<string>Ov23liNLwX1Qg3XOhdQw</string>
 	<key>AuthBridgeURL</key>
-	<string>https://auth.example</string>
+	<string>https://crewrp-auth-bridge.candydate.workers.dev</string>
 	<key>PushBridgeURL</key>
-	<string>https://push.example</string>
+	<string>https://crewrp-push-bridge.candydate.workers.dev</string>
 	<key>DiscordServerID</key>
 	<string>REPLACE_ME</string>
 	<key>DiscordChannelID</key>

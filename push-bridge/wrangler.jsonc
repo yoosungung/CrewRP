@@ -1,0 +1,12 @@
+{
+  "name": "crewrp-push-bridge",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "DEVICE_TOKENS",
+      "id": "298fa14b0ab244be9889fd758deab439"
+    }
+  ]
+}

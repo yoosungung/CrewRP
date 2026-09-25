@@ -14,9 +14,9 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-        buildConfigField("String", "GITHUB_CLIENT_ID", "\"REPLACE_ME\"")
-        buildConfigField("String", "AUTH_BRIDGE_URL", "\"https://auth.example\"")
-        buildConfigField("String", "PUSH_BRIDGE_URL", "\"https://push.example\"")
+        buildConfigField("String", "GITHUB_CLIENT_ID", "\"Ov23liNLwX1Qg3XOhdQw\"")
+        buildConfigField("String", "AUTH_BRIDGE_URL", "\"https://crewrp-auth-bridge.candydate.workers.dev\"")
+        buildConfigField("String", "PUSH_BRIDGE_URL", "\"https://crewrp-push-bridge.candydate.workers.dev\"")
         buildConfigField("String", "DISCORD_SERVER_ID", "\"REPLACE_ME\"")
         buildConfigField("String", "DISCORD_CHANNEL_ID", "\"REPLACE_ME\"")
     }
