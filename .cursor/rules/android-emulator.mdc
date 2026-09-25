@@ -1,0 +1,46 @@
+---
+description: Keep Android emulator alive across agent shell exits
+globs: android/**
+alwaysApply: true
+---
+
+# Android emulator lifecycle
+
+에이전트 셸/터미널이 끝나도 **에뮬레이터를 죽이지 않는다.** Cursor Shell은 세션 종료 시 자식 프로세스 그룹에 SIGHUP을 보낼 수 있다.
+
+## 기동
+
+```bash
+export ANDROID_HOME=${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}
+export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+# 이미 device면 재기동하지 않음 — 스크립트가 세션 분리 기동
+adb devices | grep -q $'device$' || ./android/scripts/start-emulator.sh
+```
+
+- `python3` `start_new_session=True` + `nohup` 스타일로 터미널/에이전트 셸과 **프로세스 세션을 분리**한다 (macOS에는 `setsid`가 없음).
+- `./scripts/start-emulator.sh`를 쓴다. 셸 도구로 `emulator &`만 띄우면 세션 종료 시 에뮬이 같이 죽는다.
+- E2E·설치·스크린샷은 **이미 떠 있는** `adb devices` 대상에만 한다. 작업 끝에 `adb emu kill` / `pkill emulator` 하지 않는다(사용자가 명시할 때만).
+
+## 확인
+
+```bash
+adb devices -l
+adb shell getprop sys.boot_completed   # 1 이면 준비됨
+```
+
+## Custom Tab / 로그인 키보드
+
+**username만 키보드가 안 뜨고 왼쪽 미니 바만 보이면** AVD `hw.keyboard=yes` 때문이다. Gboard가 `floating_hard` 액세서리만 띄운다.
+
+```bash
+# ~/.android/avd/Pixel_API_36.avd/config.ini
+hw.keyboard=no
+# 그다음 에뮬 재시작
+./android/scripts/start-emulator.sh
+adb shell settings put secure show_ime_with_hard_keyboard 1
+adb shell settings put secure autofill_service null   # username autofill 가로채기 방지
+```
+
+맥 물리키보다 **화면 키보드**를 쓴다. 입력 전 에뮬레이터 창을 클릭한다.
+
+앱 로그인은 Custom Tabs 대신 외부 브라우저(`ACTION_VIEW`)를 쓴다. Custom Tab의 Chrome password-fill accessory가 username 필드에서 soft IME를 가리는 경우가 있다.

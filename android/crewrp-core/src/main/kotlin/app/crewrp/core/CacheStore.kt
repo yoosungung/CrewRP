@@ -16,7 +16,17 @@ data class GraphQLCursorRow(
     val updatedAt: Instant,
 )
 
-class CacheStore(path: String) : AutoCloseable {
+interface CacheStore : AutoCloseable {
+    fun putCacheEntry(url: String, body: String, etag: String?, fetchedAt: Instant = Instant.now())
+    fun cacheEntry(url: String): CacheEntry?
+    fun putGraphQLCursor(queryName: String, cursor: String?, updatedAt: Instant)
+    fun graphQLCursor(queryName: String): GraphQLCursorRow?
+    fun putSession(session: Session)
+    fun session(): Session?
+}
+
+/** JVM / unit-test store (sqlite-jdbc). Not for Android runtime. */
+class JdbcCacheStore(path: String) : CacheStore {
     private val connection = DriverManager.getConnection("jdbc:sqlite:$path").also { conn ->
         conn.createStatement().use { st ->
             st.execute(
@@ -51,7 +61,7 @@ class CacheStore(path: String) : AutoCloseable {
         }
     }
 
-    fun putCacheEntry(url: String, body: String, etag: String?, fetchedAt: Instant = Instant.now()) {
+    override fun putCacheEntry(url: String, body: String, etag: String?, fetchedAt: Instant) {
         connection.prepareStatement(
             "INSERT OR REPLACE INTO cache_entry(url, body, etag, fetched_at) VALUES (?, ?, ?, ?)",
         ).use { ps ->
@@ -63,7 +73,7 @@ class CacheStore(path: String) : AutoCloseable {
         }
     }
 
-    fun cacheEntry(url: String): CacheEntry? {
+    override fun cacheEntry(url: String): CacheEntry? {
         connection.prepareStatement(
             "SELECT url, body, etag, fetched_at FROM cache_entry WHERE url = ?",
         ).use { ps ->
@@ -80,7 +90,7 @@ class CacheStore(path: String) : AutoCloseable {
         }
     }
 
-    fun putGraphQLCursor(queryName: String, cursor: String?, updatedAt: Instant) {
+    override fun putGraphQLCursor(queryName: String, cursor: String?, updatedAt: Instant) {
         connection.prepareStatement(
             "INSERT OR REPLACE INTO graphql_cursor(query_name, cursor, updated_at) VALUES (?, ?, ?)",
         ).use { ps ->
@@ -91,7 +101,7 @@ class CacheStore(path: String) : AutoCloseable {
         }
     }
 
-    fun graphQLCursor(queryName: String): GraphQLCursorRow? {
+    override fun graphQLCursor(queryName: String): GraphQLCursorRow? {
         connection.prepareStatement(
             "SELECT query_name, cursor, updated_at FROM graphql_cursor WHERE query_name = ?",
         ).use { ps ->
@@ -107,7 +117,7 @@ class CacheStore(path: String) : AutoCloseable {
         }
     }
 
-    fun putSession(session: Session) {
+    override fun putSession(session: Session) {
         connection.prepareStatement(
             "INSERT OR REPLACE INTO session(id, org, repo, team_role) VALUES (1, ?, ?, ?)",
         ).use { ps ->
@@ -118,7 +128,7 @@ class CacheStore(path: String) : AutoCloseable {
         }
     }
 
-    fun session(): Session? {
+    override fun session(): Session? {
         connection.prepareStatement(
             "SELECT org, repo, team_role FROM session WHERE id = 1",
         ).use { ps ->
@@ -138,3 +148,6 @@ class CacheStore(path: String) : AutoCloseable {
         connection.close()
     }
 }
+
+/** Back-compat for JVM tests. */
+typealias CacheStoreJvm = JdbcCacheStore

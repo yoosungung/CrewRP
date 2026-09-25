@@ -55,7 +55,7 @@ class TeamRoleTest {
 class CacheStoreTest {
     @Test
     fun storesRestBodyWithEtag() {
-        CacheStore(":memory:").use { store ->
+        JdbcCacheStore(":memory:").use { store ->
             store.putCacheEntry("https://api.github.com/user", """{"login":"a"}""", "\"etag1\"")
             val entry = store.cacheEntry("https://api.github.com/user")
             assertEquals("""{"login":"a"}""", entry?.body)
@@ -65,7 +65,7 @@ class CacheStoreTest {
 
     @Test
     fun storesGraphqlCursor() {
-        CacheStore(":memory:").use { store ->
+        JdbcCacheStore(":memory:").use { store ->
             store.putGraphQLCursor("discussions", "c1", Instant.ofEpochSecond(100))
             val row = store.graphQLCursor("discussions")
             assertEquals("c1", row?.cursor)
@@ -75,7 +75,7 @@ class CacheStoreTest {
 
     @Test
     fun sessionExcludesToken() {
-        CacheStore(":memory:").use { store ->
+        JdbcCacheStore(":memory:").use { store ->
             store.putSession(Session("crew", "crew/box", TeamRole.MEMBER))
             val session = store.session()
             assertEquals("crew", session?.org)
@@ -156,7 +156,7 @@ class AuthFlowTest {
                 else -> error("unexpected $method $url")
             }
         }
-        CacheStore(":memory:").use { cache ->
+        JdbcCacheStore(":memory:").use { cache ->
             val tokens = InMemoryTokenStore()
             val config = AuthConfig("cid", "crewrp://oauth/callback", "https://auth.example")
             val flow = AuthFlow(
@@ -193,7 +193,7 @@ class AuthFlowTest {
                 else -> error("unexpected $url")
             }
         }
-        CacheStore(":memory:").use { cache ->
+        JdbcCacheStore(":memory:").use { cache ->
             val flow = AuthFlow(
                 AuthConfig("cid", "crewrp://oauth/callback", "https://auth.example"),
                 AuthBridgeClient("https://auth.example", transport),
@@ -270,7 +270,7 @@ class Phase2Test {
 
         val markdown = "# 자료실\n"
         val encoded = java.util.Base64.getEncoder().encodeToString(markdown.toByteArray())
-        CacheStore(":memory:").use { cache ->
+        JdbcCacheStore(":memory:").use { cache ->
             val transport = HttpTransport { _, url, _, _ ->
                 assertTrue(url.endsWith("/repos/crew/box/contents/docs/README.md"))
                 HttpResult(200, """{"path":"docs/README.md","content":"$encoded","encoding":"base64"}""")

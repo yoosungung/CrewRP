@@ -6,7 +6,6 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -83,7 +82,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val dbPath = File(filesDir, "crewrp.sqlite").absolutePath
         val transport = UrlHttpTransport()
         val config = AuthConfig(
             clientId = BuildConfig.GITHUB_CLIENT_ID,
@@ -91,7 +89,7 @@ class MainActivity : ComponentActivity() {
             authBridgeBaseUrl = BuildConfig.AUTH_BRIDGE_URL,
         )
         tokens = EncryptedPrefsTokenStore(this)
-        cache = CacheStore(dbPath)
+        cache = AndroidCacheStore(this)
         flow = AuthFlow(
             config,
             AuthBridgeClient(config.authBridgeBaseUrl, transport),
@@ -116,8 +114,13 @@ class MainActivity : ComponentActivity() {
                     }
                     else -> LoginScreen(error) {
                         val challenge = flow.beginLogin()
-                        CustomTabsIntent.Builder().build()
-                            .launchUrl(this, Uri.parse(challenge.authorizeUrl))
+                        // Custom Tabs + Chrome password-fill accessory often hides the soft
+                        // keyboard on username/email; external browser shows IME reliably.
+                        startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(challenge.authorizeUrl)).apply {
+                                addCategory(Intent.CATEGORY_BROWSABLE)
+                            },
+                        )
                     }
                 }
             }
