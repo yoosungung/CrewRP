@@ -352,3 +352,42 @@ struct DiscordDeepLinkTests {
         #expect(url.absoluteString == "https://discord.com/channels/1/2")
     }
 }
+
+@Suite("ShellPresentation")
+struct ShellPresentationTests {
+    @Test("labels role, lane, and due date")
+    func labels() {
+        #expect(TeamRole.admin.label == "운영진")
+        #expect(TeamRole.member.label == "멤버")
+        #expect(taskLane(status: "Todo") == .inbox)
+        #expect(taskLane(status: "In Progress") == .doing)
+        #expect(taskLane(status: "완료") == .done)
+        #expect(formatDue("2026-09-05") == "9월 5일")
+        #expect(formatDue(nil) == "마감 없음")
+        #expect(crewDisplayName("acme/crew") == "crew")
+        #expect(crewOwnerName("acme/crew") == "acme")
+        #expect(discordConfigured(serverId: "REPLACE_ME", channelId: "1") == false)
+        #expect(discordConfigured(serverId: "123", channelId: "456") == true)
+    }
+
+    @Test("home keeps today, upcoming, and three notices")
+    func home() {
+        let tasks = [
+            TaskCard(id: "a", title: "오늘", status: "접수", dueOn: "2026-09-27T09:00:00"),
+            TaskCard(id: "b", title: "다음", status: "In Progress", dueOn: "2026-10-01"),
+            TaskCard(id: "c", title: "끝", status: "Done", dueOn: "2026-10-02"),
+            TaskCard(id: "d", title: "지난", status: "접수", dueOn: "2026-09-01"),
+        ]
+        let notices = (1...4).map { Notice(id: "n\($0)", title: "공지\($0)", body: "") }
+        let home = homeSections(tasks: tasks, notices: notices, today: "2026-09-27")
+        #expect(home.today.map(\.id) == ["a"])
+        #expect(home.upcoming.map(\.id) == ["b"])
+        #expect(home.notices.map(\.id) == ["n1", "n2", "n3"])
+    }
+
+    @Test("doc blocks keep headings, bullets, and paragraphs")
+    func blocks() {
+        let blocks = docBlocks("# 정관\n\n첫 문단\n이어짐\n\n- 하나\n")
+        #expect(blocks == [.heading("정관"), .paragraph("첫 문단 이어짐"), .bullet("하나")])
+    }
+}

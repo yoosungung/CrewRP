@@ -209,6 +209,71 @@ class AuthFlowTest {
             assertEquals(TeamRole.ADMIN, session.teamRole)
         }
     }
+
+    @Test
+    fun completesLoginAfterNewAuthFlowUsingPersistedPending() {
+        val pending = InMemoryPendingLoginStore()
+        val transport = HttpTransport { _, url, _, _ ->
+            when {
+                url.endsWith("/oauth/token") ->
+                    HttpResult(200, """{"access_token":"gho_ok"}""")
+                url.contains("/user/repos") ->
+                    HttpResult(
+                        200,
+                        """[{"name":"ai-edu","full_name":"yoosungung/ai-edu","private":true,
+                            "permissions":{"admin":true},"owner":{"login":"yoosungung"}}]""",
+                    )
+                else -> error("unexpected $url")
+            }
+        }
+        JdbcCacheStore(":memory:").use { cache ->
+            val config = AuthConfig("cid", "crewrp://oauth/callback", "https://auth.example")
+            val first = AuthFlow(
+                config,
+                AuthBridgeClient(config.authBridgeBaseUrl, transport),
+                GitHubMembershipClient(transport),
+                InMemoryTokenStore(),
+                cache,
+                pending,
+            )
+            val challenge = first.beginLogin()
+            val second = AuthFlow(
+                config,
+                AuthBridgeClient(config.authBridgeBaseUrl, transport),
+                GitHubMembershipClient(transport),
+                InMemoryTokenStore(),
+                cache,
+                pending,
+            )
+            val repos = second.completeLogin("crewrp://oauth/callback?code=abc&state=${challenge.state}")
+            assertEquals(listOf("yoosungung/ai-edu"), repos.map { it.fullName })
+            assertEquals(null, pending.load())
+        }
+    }
+
+    @Test
+    fun emptyRegistrableReposStillCompletesLogin() {
+        val transport = HttpTransport { _, url, _, _ ->
+            when {
+                url.endsWith("/oauth/token") ->
+                    HttpResult(200, """{"access_token":"gho_ok"}""")
+                url.contains("/user/repos") -> HttpResult(200, "[]")
+                else -> error("unexpected $url")
+            }
+        }
+        JdbcCacheStore(":memory:").use { cache ->
+            val flow = AuthFlow(
+                AuthConfig("cid", "crewrp://oauth/callback", "https://auth.example"),
+                AuthBridgeClient("https://auth.example", transport),
+                GitHubMembershipClient(transport),
+                InMemoryTokenStore(),
+                cache,
+            )
+            val challenge = flow.beginLogin()
+            val repos = flow.completeLogin("crewrp://oauth/callback?code=abc&state=${challenge.state}")
+            assertEquals(emptyList(), repos)
+        }
+    }
 }
 
 class Phase2Test {
@@ -279,5 +344,95 @@ class Phase2Test {
                 .fetchMarkdown("crew", "box", "docs/README.md", "t")
             assertTrue(doc.content.contains("자료실"))
         }
+    }
+}
+
+class ShellPresentationTest {
+    @Test
+    fun labelsRoleLaneAndDueDate() {
+        assertEquals("운영진", roleLabel(TeamRole.ADMIN))
+        assertEquals("멤버", roleLabel(TeamRole.MEMBER))
+        assertEquals(TaskLane.INBOX, taskLane("Todo"))
+        assertEquals(TaskLane.DOING, taskLane("In Progress"))
+        assertEquals(TaskLane.DONE, taskLane("완료"))
+        assertEquals("9월 5일", formatDue("2026-09-05"))
+        assertEquals("마감 없음", formatDue(null))
+        assertEquals("crew", crewDisplayName("acme/crew"))
+        assertEquals("acme", crewOwnerName("acme/crew"))
+        assertEquals(false, discordConfigured("REPLACE_ME", "1"))
+        assertEquals(true, discordConfigured("123", "456"))
+    }
+
+    @Test
+    fun homeKeepsTodayUpcomingAndThreeNotices() {
+        val tasks = listOf(
+            TaskCard("a", "오늘", "접수", "2026-09-27T09:00:00"),
+            TaskCard("b", "다음", "In Progress", "2026-10-01"),
+            TaskCard("c", "끝", "Done", "2026-10-02"),
+            TaskCard("d", "지난", "접수", "2026-09-01"),
+        )
+        val notices = (1..4).map { Notice("n$it", "공지$it", "") }
+        val home = homeSections(tasks, notices, "2026-09-27")
+        assertEquals(listOf("a"), home.today.map { it.id })
+        assertEquals(listOf("b"), home.upcoming.map { it.id })
+        assertEquals(listOf("n1", "n2", "n3"), home.notices.map { it.id })
+    }
+
+    @Test
+    fun docBlocksKeepHeadingsBulletsAndParagraphs() {
+        val blocks = docBlocks("# 정관\n\n첫 문단\n이어짐\n\n- 하나\n")
+        assertEquals(
+            listOf(
+                DocBlock.Heading("정관"),
+                DocBlock.Paragraph("첫 문단 이어짐"),
+                DocBlock.Bullet("하나"),
+            ),
+            blocks,
+        )
+    }
+
+    @Test
+    fun listTasksReadsStatusAndSkipsMissingProject() {
+        val payload = """
+            {"data":{"organization":{"projectV2":{"items":{"nodes":[
+              {"id":"t1","content":{"title":"보고서"},"fieldValues":{"nodes":[
+                {"name":"In Progress","field":{"name":"Status"}},
+                {"date":"2026-09-27","field":{"name":"Due"}}
+              ]}}
+            ]}}}}}
+        """.trimIndent()
+        val client = ProjectsClient(HttpTransport { method, url, _, _ ->
+            assertEquals("POST", method)
+            assertTrue(url.endsWith("/graphql"))
+            HttpResult(200, payload)
+        })
+        val cards = client.listTasks("crew", 1, "tok")
+        assertEquals("보고서", cards.single().title)
+        assertEquals("2026-09-27", cards.single().dueOn)
+        assertEquals(TaskLane.DOING, taskLane(cards.single().status))
+
+        val empty = ProjectsClient(HttpTransport { _, _, _, _ ->
+            HttpResult(200, """{"data":{"organization":{"projectV2":null}}}""")
+        })
+        assertEquals(emptyList(), empty.listTasks("crew", 1, "tok"))
+    }
+
+    @Test
+    fun listNoticesAndThreadComments() {
+        val notices = DiscussionsClient(HttpTransport { _, _, _, _ ->
+            HttpResult(
+                200,
+                """{"data":{"repository":{"discussions":{"nodes":[{"id":"n1","title":"정기 모임","body":"금요일"}]}}}}""",
+            )
+        }).listNotices("crew", "box", "tok")
+        assertEquals("정기 모임", notices.single().title)
+
+        val comments = ThreadTalkClient(HttpTransport { method, url, _, _ ->
+            assertEquals("GET", method)
+            assertTrue(url.endsWith("/repos/crew/box/issues/1/comments"))
+            HttpResult(200, """[{"id":12,"body":"확인했습니다","user":{"login":"ada"}}]""")
+        }).listIssueComments("crew", "box", 1, "tok")
+        assertEquals("ada", comments.single().author)
+        assertEquals("확인했습니다", comments.single().body)
     }
 }

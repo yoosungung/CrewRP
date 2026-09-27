@@ -19,6 +19,7 @@ android {
         buildConfigField("String", "PUSH_BRIDGE_URL", "\"https://crewrp-push-bridge.candydate.workers.dev\"")
         buildConfigField("String", "DISCORD_SERVER_ID", "\"REPLACE_ME\"")
         buildConfigField("String", "DISCORD_CHANNEL_ID", "\"REPLACE_ME\"")
+        buildConfigField("String", "PROJECT_NUMBER", "\"1\"")
     }
 
     buildFeatures {
@@ -41,6 +42,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")

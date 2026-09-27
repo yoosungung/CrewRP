@@ -25,7 +25,27 @@ public struct LoginChallenge: Sendable, Equatable {
 public enum AuthFlowError: Error, Equatable {
     case stateMismatch
     case missingCode
-    case noRegistrableRepos
+    case missingPendingLogin
+}
+
+public protocol PendingLoginStore: AnyObject {
+    func save(state: String, codeVerifier: String) throws
+    func load() throws -> (state: String, codeVerifier: String)?
+    func clear() throws
+}
+
+public final class InMemoryPendingLoginStore: PendingLoginStore, @unchecked Sendable {
+    private var pending: (state: String, codeVerifier: String)?
+
+    public init() {}
+
+    public func save(state: String, codeVerifier: String) {
+        pending = (state, codeVerifier)
+    }
+
+    public func load() -> (state: String, codeVerifier: String)? { pending }
+
+    public func clear() { pending = nil }
 }
 
 public final class AuthFlow: @unchecked Sendable {
@@ -34,20 +54,22 @@ public final class AuthFlow: @unchecked Sendable {
     private let membership: GitHubMembershipClient
     private let tokens: any TokenStore
     private let cache: CacheStore
-    private var pending: LoginChallenge?
+    private let pendingStore: any PendingLoginStore
 
     public init(
         config: AuthConfig,
         bridge: AuthBridgeClient,
         membership: GitHubMembershipClient,
         tokens: any TokenStore,
-        cache: CacheStore
+        cache: CacheStore,
+        pendingStore: any PendingLoginStore = InMemoryPendingLoginStore()
     ) {
         self.config = config
         self.bridge = bridge
         self.membership = membership
         self.tokens = tokens
         self.cache = cache
+        self.pendingStore = pendingStore
     }
 
     public func beginLogin() -> LoginChallenge {
@@ -59,9 +81,8 @@ public final class AuthFlow: @unchecked Sendable {
             state: state,
             codeChallenge: pkce.challenge
         )
-        let challenge = LoginChallenge(authorizeURL: url, state: state, codeVerifier: pkce.verifier)
-        pending = challenge
-        return challenge
+        try? pendingStore.save(state: state, codeVerifier: pkce.verifier)
+        return LoginChallenge(authorizeURL: url, state: state, codeVerifier: pkce.verifier)
     }
 
     /// Exchanges the OAuth code and returns private repos the user can register as a crew.
@@ -73,7 +94,7 @@ public final class AuthFlow: @unchecked Sendable {
                 map[item.name] = value
             }
         }
-        guard let pending else { throw AuthFlowError.missingCode }
+        guard let pending = try pendingStore.load() else { throw AuthFlowError.missingPendingLogin }
         guard map["state"] == pending.state else { throw AuthFlowError.stateMismatch }
         guard let code = map["code"] else { throw AuthFlowError.missingCode }
 
@@ -83,11 +104,8 @@ public final class AuthFlow: @unchecked Sendable {
             redirectURI: config.redirectURI
         )
         try tokens.saveAccessToken(token.accessToken)
-        self.pending = nil
-
-        let repos = try await membership.listRegistrableRepos(token: token.accessToken)
-        guard !repos.isEmpty else { throw AuthFlowError.noRegistrableRepos }
-        return repos
+        try pendingStore.clear()
+        return try await membership.listRegistrableRepos(token: token.accessToken)
     }
 
     public func registerCrew(_ repo: CrewRepo) async throws -> Session {

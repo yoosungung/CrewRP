@@ -3,7 +3,13 @@ package app.crewrp.core
 import java.util.Base64
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
@@ -63,8 +69,75 @@ class ProjectsClient(
     private val transport: HttpTransport,
     private val apiBase: String = "https://api.github.com",
 ) {
+    private val json = Json { ignoreUnknownKeys = true }
+
     fun sortedByDueDate(cards: List<TaskCard>): List<TaskCard> =
         cards.sortedBy { it.dueOn ?: "9999" }
+
+    fun listTasks(org: String, projectNumber: Int, token: String): List<TaskCard> {
+        val query = """
+            query(${'$'}org:String!,${'$'}number:Int!){
+              organization(login:${'$'}org){
+                projectV2(number:${'$'}number){
+                  items(first:50){
+                    nodes{
+                      id
+                      content{ ... on Issue { title } }
+                      fieldValues(first:20){
+                        nodes{
+                          ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
+                          ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { name } } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val body = buildJsonObject {
+            put("query", query)
+            putJsonObject("variables") {
+                put("org", org)
+                put("number", projectNumber)
+            }
+        }.toString()
+        val result = transport.exchange(
+            "POST",
+            "$apiBase/graphql",
+            mapOf(
+                "Authorization" to "Bearer $token",
+                "Content-Type" to "application/json",
+            ),
+            body,
+        )
+        require(result.status in 200..299) { "github http ${result.status}" }
+        return parseTaskCards(json.parseToJsonElement(result.body).jsonObject)
+    }
+
+    private fun parseTaskCards(root: JsonObject): List<TaskCard> {
+        val project = root["data"]?.jsonObject?.get("organization")?.jsonObject?.get("projectV2")
+            ?: return emptyList()
+        if (project is JsonNull) return emptyList()
+        val nodes = project.jsonObject["items"]?.jsonObject?.get("nodes")?.jsonArray ?: return emptyList()
+        return nodes.mapNotNull { element ->
+            if (element !is JsonObject) return@mapNotNull null
+            val id = element["id"].textOrNull() ?: return@mapNotNull null
+            val title = element["content"]?.takeUnless { it is JsonNull }?.jsonObject?.get("title").textOrNull()
+                ?: "(제목 없음)"
+            var status = "접수"
+            var due: String? = null
+            val fields = element["fieldValues"]?.jsonObject?.get("nodes")?.jsonArray
+            fields?.forEach { fieldEl ->
+                if (fieldEl !is JsonObject) return@forEach
+                when (fieldEl["field"]?.takeUnless { it is JsonNull }?.jsonObject?.get("name").textOrNull()) {
+                    "Status" -> fieldEl["name"].textOrNull()?.let { status = it }
+                    "Due" -> due = fieldEl["date"].textOrNull()
+                }
+            }
+            TaskCard(id, title, status, due)
+        }
+    }
 }
 
 data class Notice(val id: String, val title: String, val body: String)
@@ -74,6 +147,44 @@ class DiscussionsClient(
     private val apiBase: String = "https://api.github.com",
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+
+    fun listNotices(owner: String, repo: String, token: String): List<Notice> {
+        val query = """
+            query(${'$'}owner:String!,${'$'}name:String!){
+              repository(owner:${'$'}owner,name:${'$'}name){
+                discussions(first:20){ nodes { id title body } }
+              }
+            }
+        """.trimIndent()
+        val body = buildJsonObject {
+            put("query", query)
+            putJsonObject("variables") {
+                put("owner", owner)
+                put("name", repo)
+            }
+        }.toString()
+        val result = transport.exchange(
+            "POST",
+            "$apiBase/graphql",
+            mapOf(
+                "Authorization" to "Bearer $token",
+                "Content-Type" to "application/json",
+            ),
+            body,
+        )
+        require(result.status in 200..299) { "github http ${result.status}" }
+        val repository = json.parseToJsonElement(result.body).jsonObject["data"]
+            ?.jsonObject?.get("repository") ?: return emptyList()
+        if (repository is JsonNull) return emptyList()
+        val nodes = repository.jsonObject["discussions"]?.jsonObject?.get("nodes")?.jsonArray
+            ?: return emptyList()
+        return nodes.mapNotNull { element ->
+            if (element !is JsonObject) return@mapNotNull null
+            val id = element["id"].textOrNull() ?: return@mapNotNull null
+            Notice(id, element["title"].textOrNull().orEmpty(), element["body"].textOrNull().orEmpty())
+        }
+    }
+
     fun vote(pollOptionId: String, token: String) {
         val body = buildJsonObject {
             put("query", "mutation(\$input:AddDiscussionPollVoteInput!){ addDiscussionPollVote(input:\$input){ pollOption { id } } }")
@@ -140,4 +251,38 @@ data class ThreadMessage(val id: String, val body: String, val author: String)
 object DiscordDeepLink {
     fun voiceChannelUrl(serverId: String, channelId: String): String =
         "https://discord.com/channels/$serverId/$channelId"
+}
+
+class ThreadTalkClient(
+    private val transport: HttpTransport,
+    private val apiBase: String = "https://api.github.com",
+) {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    fun listIssueComments(owner: String, repo: String, issueNumber: Int, token: String): List<ThreadMessage> {
+        val result = transport.exchange(
+            "GET",
+            "$apiBase/repos/$owner/$repo/issues/$issueNumber/comments",
+            mapOf(
+                "Authorization" to "Bearer $token",
+                "Accept" to "application/vnd.github+json",
+                "X-GitHub-Api-Version" to "2022-11-28",
+            ),
+            null,
+        )
+        require(result.status in 200..299) { "github http ${result.status}" }
+        if (result.body.isBlank()) return emptyList()
+        val nodes = json.parseToJsonElement(result.body).jsonArray
+        return nodes.mapNotNull { element ->
+            if (element !is JsonObject) return@mapNotNull null
+            val id = element["id"].textOrNull() ?: return@mapNotNull null
+            val author = element["user"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull().orEmpty()
+            ThreadMessage(id, element["body"].textOrNull().orEmpty(), author)
+        }
+    }
+}
+
+private fun kotlinx.serialization.json.JsonElement?.textOrNull(): String? {
+    if (this == null || this is JsonNull || this !is JsonPrimitive) return null
+    return contentOrNull
 }

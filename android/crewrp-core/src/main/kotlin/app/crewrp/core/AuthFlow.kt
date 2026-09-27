@@ -18,9 +18,8 @@ class AuthFlow(
     private val membership: GitHubMembershipClient,
     private val tokens: TokenStore,
     private val cache: CacheStore,
+    private val pendingStore: PendingLoginStore = InMemoryPendingLoginStore(),
 ) {
-    private var pending: LoginChallenge? = null
-
     fun beginLogin(): LoginChallenge {
         val pkce = PKCE.generate()
         val state = PKCE.generate().verifier
@@ -30,20 +29,19 @@ class AuthFlow(
             state = state,
             codeChallenge = pkce.challenge,
         )
-        return LoginChallenge(url, state, pkce.verifier).also { pending = it }
+        pendingStore.save(PendingLogin(state, pkce.verifier))
+        return LoginChallenge(url, state, pkce.verifier)
     }
 
     fun completeLogin(callbackUrl: String): List<CrewRepo> {
         val query = URIQuery.parse(callbackUrl)
-        val pending = pending ?: error("missing pending login")
+        val pending = pendingStore.load() ?: error("missing pending login")
         require(query["state"] == pending.state) { "state mismatch" }
         val code = query["code"] ?: error("missing code")
         val token = bridge.exchange(code, pending.codeVerifier, config.redirectUri)
         tokens.saveAccessToken(token.accessToken)
-        this.pending = null
-        val repos = membership.listRegistrableRepos(token.accessToken)
-        require(repos.isNotEmpty()) { "no registrable repos" }
-        return repos
+        pendingStore.clear()
+        return membership.listRegistrableRepos(token.accessToken)
     }
 
     fun registerCrew(repo: CrewRepo): Session {

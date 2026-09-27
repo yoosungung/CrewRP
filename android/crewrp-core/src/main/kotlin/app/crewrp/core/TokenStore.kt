@@ -6,6 +6,14 @@ interface TokenStore {
     fun clearAccessToken()
 }
 
+data class PendingLogin(val state: String, val codeVerifier: String)
+
+interface PendingLoginStore {
+    fun save(pending: PendingLogin)
+    fun load(): PendingLogin?
+    fun clear()
+}
+
 class InMemoryTokenStore : TokenStore {
     private var token: String? = null
 
@@ -17,5 +25,19 @@ class InMemoryTokenStore : TokenStore {
 
     override fun clearAccessToken() {
         token = null
+    }
+}
+
+class InMemoryPendingLoginStore : PendingLoginStore {
+    private var pending: PendingLogin? = null
+
+    override fun save(pending: PendingLogin) {
+        this.pending = pending
+    }
+
+    override fun load(): PendingLogin? = pending
+
+    override fun clear() {
+        pending = null
     }
 }
