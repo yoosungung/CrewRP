@@ -27,6 +27,14 @@ public extension TeamRole {
     var label: String { self == .admin ? "운영진" : "멤버" }
 }
 
+/// 운영진은 전부, 멤버는 본인 작성분만 수정·삭제.
+public func canMutate(role: TeamRole, authorLogin: String?, currentLogin: String?) -> Bool {
+    if role == .admin { return true }
+    guard let authorLogin, let currentLogin,
+          !authorLogin.isEmpty, !currentLogin.isEmpty else { return false }
+    return authorLogin.caseInsensitiveCompare(currentLogin) == .orderedSame
+}
+
 public func crewDisplayName(_ repo: String) -> String {
     guard let slash = repo.lastIndex(of: "/") else { return repo }
     let name = repo[repo.index(after: slash)...]

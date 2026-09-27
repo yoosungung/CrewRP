@@ -10,6 +10,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
@@ -37,21 +38,45 @@ class ETagRESTClient(
             return CachedHTTPResponse(304, cached.body, cached.etag, true)
         }
         require(result.status in 200..299) { "github http ${result.status}" }
-        val etag = null // transport abstraction omits headers; callers may still store body
-        cache.putCacheEntry(url, result.body, etag)
-        return CachedHTTPResponse(result.status, result.body, etag, false)
+        cache.putCacheEntry(url, result.body, null)
+        return CachedHTTPResponse(result.status, result.body, null, false)
     }
 }
 
-data class DocFile(val path: String, val content: String)
+data class DocFile(val path: String, val content: String, val sha: String? = null)
 
 class DocsClient(
-    private val rest: ETagRESTClient,
+    private val transport: HttpTransport,
+    private val cache: CacheStore,
     private val apiBase: String = "https://api.github.com",
 ) {
+    private val rest = ETagRESTClient(transport, cache)
     private val json = Json { ignoreUnknownKeys = true }
+
     @Serializable
-    private data class ContentDTO(val path: String, val content: String? = null, val encoding: String? = null)
+    private data class ContentDTO(
+        val path: String,
+        val name: String? = null,
+        val content: String? = null,
+        val encoding: String? = null,
+        val sha: String? = null,
+        val type: String? = null,
+    )
+
+    fun listDocs(owner: String, repo: String, token: String, path: String = "docs"): List<DocEntry> {
+        val result = transport.rest("GET", "$apiBase/repos/$owner/$repo/contents/$path", token)
+        if (result.status == 404) return emptyList()
+        require(result.status in 200..299) { "github http ${result.status}" }
+        val el = json.parseToJsonElement(result.body)
+        if (el !is kotlinx.serialization.json.JsonArray) return emptyList()
+        return el.mapNotNull { node ->
+            if (node !is JsonObject) return@mapNotNull null
+            val p = node["path"].textOrNull() ?: return@mapNotNull null
+            val name = node["name"].textOrNull() ?: p.substringAfterLast('/')
+            val type = node["type"].textOrNull()
+            DocEntry(p, name, node["sha"].textOrNull(), type == "dir")
+        }
+    }
 
     fun fetchMarkdown(owner: String, repo: String, path: String, token: String): DocFile {
         val url = "$apiBase/repos/$owner/$repo/contents/$path"
@@ -59,11 +84,43 @@ class DocsClient(
         val dto = json.decodeFromString(ContentDTO.serializer(), response.body)
         require(dto.encoding == "base64" && dto.content != null)
         val bytes = Base64.getMimeDecoder().decode(dto.content.replace("\n", ""))
-        return DocFile(dto.path, bytes.toString(Charsets.UTF_8))
+        return DocFile(dto.path, bytes.toString(Charsets.UTF_8), dto.sha)
+    }
+
+    fun saveMarkdown(owner: String, repo: String, path: String, content: String, token: String, sha: String?): DocFile {
+        require(path.startsWith("docs/")) { "path must be under docs/" }
+        val encoded = Base64.getEncoder().encodeToString(content.toByteArray(Charsets.UTF_8))
+        val body = buildJsonObject {
+            put("message", "자료 저장")
+            put("content", encoded)
+            if (sha != null) put("sha", sha)
+        }.toString()
+        val result = transport.rest("PUT", "$apiBase/repos/$owner/$repo/contents/$path", token, body)
+        require(result.status in 200..299) { "github http ${result.status}" }
+        val contentObj = json.parseToJsonElement(result.body).jsonObject["content"]?.jsonObject
+        val newSha = contentObj?.get("sha").textOrNull()
+        return DocFile(path, content, newSha)
+    }
+
+    fun deleteDoc(owner: String, repo: String, path: String, sha: String, token: String) {
+        require(path.startsWith("docs/")) { "path must be under docs/" }
+        val body = buildJsonObject {
+            put("message", "자료 삭제")
+            put("sha", sha)
+        }.toString()
+        val result = transport.rest("DELETE", "$apiBase/repos/$owner/$repo/contents/$path", token, body)
+        require(result.status in 200..299) { "github http ${result.status}" }
     }
 }
 
-data class TaskCard(val id: String, val title: String, val status: String, val dueOn: String?)
+data class TaskCard(
+    val id: String,
+    val title: String,
+    val status: String,
+    val dueOn: String?,
+    val issueNumber: Int? = null,
+    val contentId: String? = null,
+)
 
 class ProjectsClient(
     private val transport: HttpTransport,
@@ -74,15 +131,223 @@ class ProjectsClient(
     fun sortedByDueDate(cards: List<TaskCard>): List<TaskCard> =
         cards.sortedBy { it.dueOn ?: "9999" }
 
-    fun listTasks(org: String, projectNumber: Int, token: String): List<TaskCard> {
+    fun listTasks(owner: String, projectNumber: Int, token: String): List<TaskCard> {
+        val orgCards = queryProjectItems("organization", owner, projectNumber, token)
+        if (orgCards != null) return orgCards
+        return queryProjectItems("user", owner, projectNumber, token) ?: emptyList()
+    }
+
+    fun loadFieldMeta(owner: String, projectNumber: Int, token: String): ProjectFieldMeta? {
         val query = """
-            query(${'$'}org:String!,${'$'}number:Int!){
-              organization(login:${'$'}org){
+            query(${'$'}login:String!,${'$'}number:Int!){
+              organization(login:${'$'}login){
+                projectV2(number:${'$'}number){
+                  id
+                  fields(first:20){
+                    nodes{
+                      ... on ProjectV2SingleSelectField { id name options { id name } }
+                      ... on ProjectV2Field { id name }
+                    }
+                  }
+                }
+              }
+              user(login:${'$'}login){
+                projectV2(number:${'$'}number){
+                  id
+                  fields(first:20){
+                    nodes{
+                      ... on ProjectV2SingleSelectField { id name options { id name } }
+                      ... on ProjectV2Field { id name }
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            query,
+            buildJsonObject {
+                put("login", owner)
+                put("number", projectNumber)
+            },
+        )
+        val data = root["data"]?.jsonObject ?: return null
+        val project = data["organization"]?.takeUnless { it is JsonNull }?.jsonObject?.get("projectV2")
+            ?.takeUnless { it is JsonNull }?.jsonObject
+            ?: data["user"]?.takeUnless { it is JsonNull }?.jsonObject?.get("projectV2")
+                ?.takeUnless { it is JsonNull }?.jsonObject
+            ?: return null
+        val projectId = project["id"].textOrNull() ?: return null
+        var statusFieldId: String? = null
+        var dueFieldId: String? = null
+        val options = mutableMapOf<String, String>()
+        project["fields"]?.jsonObject?.get("nodes")?.jsonArray?.forEach { node ->
+            if (node !is JsonObject) return@forEach
+            when (node["name"].textOrNull()) {
+                "Status" -> {
+                    statusFieldId = node["id"].textOrNull()
+                    node["options"]?.jsonArray?.forEach { opt ->
+                        val o = opt as? JsonObject ?: return@forEach
+                        val name = o["name"].textOrNull() ?: return@forEach
+                        val id = o["id"].textOrNull() ?: return@forEach
+                        options[name] = id
+                    }
+                }
+                "Due" -> dueFieldId = node["id"].textOrNull()
+            }
+        }
+        return ProjectFieldMeta(projectId, statusFieldId, dueFieldId, options)
+    }
+
+    fun createTask(
+        owner: String,
+        repo: String,
+        title: String,
+        body: String,
+        projectNumber: Int,
+        token: String,
+        dueOn: String? = null,
+        statusLabel: String = "접수",
+    ): TaskCard {
+        val issueBody = buildJsonObject {
+            put("title", title)
+            put("body", body)
+        }.toString()
+        val created = transport.rest("POST", "$apiBase/repos/$owner/$repo/issues", token, issueBody)
+        require(created.status in 200..299) { "github http ${created.status}" }
+        val issue = json.parseToJsonElement(created.body).jsonObject
+        val number = issue["number"]?.jsonPrimitive?.content?.toIntOrNull() ?: error("missing issue number")
+        val nodeId = issue["node_id"].textOrNull() ?: error("missing node_id")
+        val meta = loadFieldMeta(owner, projectNumber, token) ?: error("missing project")
+        val added = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            mutation(${'$'}projectId:ID!,${'$'}contentId:ID!){
+              addProjectV2ItemById(input:{projectId:${'$'}projectId,contentId:${'$'}contentId}){
+                item { id }
+              }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                put("projectId", meta.projectId)
+                put("contentId", nodeId)
+            },
+        )
+        val itemId = added["data"]?.jsonObject
+            ?.get("addProjectV2ItemById")?.jsonObject
+            ?.get("item")?.jsonObject
+            ?.get("id").textOrNull()
+            ?: error("missing project item")
+        val statusOpt = meta.statusOptions.entries.firstOrNull {
+            it.key == statusLabel || taskLane(it.key) == taskLane(statusLabel)
+        }?.value
+        updateTaskFields(
+            projectId = meta.projectId,
+            itemId = itemId,
+            statusFieldId = meta.statusFieldId,
+            statusOptionId = statusOpt,
+            dueFieldId = meta.dueFieldId,
+            dueOn = dueOn,
+            token = token,
+        )
+        return TaskCard(itemId, title, statusLabel, dueOn, number, nodeId)
+    }
+
+    fun updateTaskFields(
+        projectId: String,
+        itemId: String,
+        statusFieldId: String?,
+        statusOptionId: String?,
+        dueFieldId: String?,
+        dueOn: String?,
+        token: String,
+    ) {
+        if (statusFieldId != null && statusOptionId != null) {
+            Graphql.post(
+                transport,
+                apiBase,
+                token,
+                """
+                mutation(${'$'}input:UpdateProjectV2ItemFieldValueInput!){
+                  updateProjectV2ItemFieldValue(input:${'$'}input){ projectV2Item { id } }
+                }
+                """.trimIndent(),
+                buildJsonObject {
+                    putJsonObject("input") {
+                        put("projectId", projectId)
+                        put("itemId", itemId)
+                        put("fieldId", statusFieldId)
+                        putJsonObject("value") { put("singleSelectOptionId", statusOptionId) }
+                    }
+                },
+            )
+        }
+        if (dueFieldId != null && dueOn != null) {
+            Graphql.post(
+                transport,
+                apiBase,
+                token,
+                """
+                mutation(${'$'}input:UpdateProjectV2ItemFieldValueInput!){
+                  updateProjectV2ItemFieldValue(input:${'$'}input){ projectV2Item { id } }
+                }
+                """.trimIndent(),
+                buildJsonObject {
+                    putJsonObject("input") {
+                        put("projectId", projectId)
+                        put("itemId", itemId)
+                        put("fieldId", dueFieldId)
+                        putJsonObject("value") { put("date", dueOn) }
+                    }
+                },
+            )
+        }
+    }
+
+    fun deleteTask(projectId: String, itemId: String, owner: String, repo: String, issueNumber: Int?, token: String) {
+        Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            mutation(${'$'}input:DeleteProjectV2ItemInput!){
+              deleteProjectV2Item(input:${'$'}input){ deletedItemId }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                putJsonObject("input") {
+                    put("projectId", projectId)
+                    put("itemId", itemId)
+                }
+            },
+        )
+        if (issueNumber != null) {
+            transport.rest(
+                "PATCH",
+                "$apiBase/repos/$owner/$repo/issues/$issueNumber",
+                token,
+                """{"state":"closed"}""",
+            )
+        }
+    }
+
+    private fun queryProjectItems(kind: String, login: String, projectNumber: Int, token: String): List<TaskCard>? {
+        val rootField = if (kind == "organization") "organization" else "user"
+        val query = """
+            query(${'$'}login:String!,${'$'}number:Int!){
+              $rootField(login:${'$'}login){
                 projectV2(number:${'$'}number){
                   items(first:50){
                     nodes{
                       id
-                      content{ ... on Issue { title } }
+                      content{
+                        ... on Issue { title number id }
+                      }
                       fieldValues(first:20){
                         nodes{
                           ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
@@ -95,52 +360,49 @@ class ProjectsClient(
               }
             }
         """.trimIndent()
-        val body = buildJsonObject {
-            put("query", query)
-            putJsonObject("variables") {
-                put("org", org)
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            query,
+            buildJsonObject {
+                put("login", login)
                 put("number", projectNumber)
-            }
-        }.toString()
-        val result = transport.exchange(
-            "POST",
-            "$apiBase/graphql",
-            mapOf(
-                "Authorization" to "Bearer $token",
-                "Content-Type" to "application/json",
-            ),
-            body,
+            },
         )
-        require(result.status in 200..299) { "github http ${result.status}" }
-        return parseTaskCards(json.parseToJsonElement(result.body).jsonObject)
+        val container = root["data"]?.jsonObject?.get(rootField)
+        if (container == null || container is JsonNull) return null
+        val project = container.jsonObject["projectV2"]
+        if (project == null || project is JsonNull) return null
+        return parseTaskCards(project.jsonObject)
     }
 
-    private fun parseTaskCards(root: JsonObject): List<TaskCard> {
-        val project = root["data"]?.jsonObject?.get("organization")?.jsonObject?.get("projectV2")
-            ?: return emptyList()
-        if (project is JsonNull) return emptyList()
-        val nodes = project.jsonObject["items"]?.jsonObject?.get("nodes")?.jsonArray ?: return emptyList()
+    private fun parseTaskCards(project: JsonObject): List<TaskCard> {
+        val nodes = project["items"]?.jsonObject?.get("nodes")?.jsonArray ?: return emptyList()
         return nodes.mapNotNull { element ->
             if (element !is JsonObject) return@mapNotNull null
             val id = element["id"].textOrNull() ?: return@mapNotNull null
-            val title = element["content"]?.takeUnless { it is JsonNull }?.jsonObject?.get("title").textOrNull()
-                ?: "(제목 없음)"
+            val content = element["content"]?.takeUnless { it is JsonNull }?.jsonObject
+            val title = content?.get("title").textOrNull() ?: "(제목 없음)"
+            val issueNumber = content?.get("number")?.let {
+                (it as? JsonPrimitive)?.content?.toIntOrNull()
+            }
+            val contentId = content?.get("id").textOrNull()
             var status = "접수"
             var due: String? = null
-            val fields = element["fieldValues"]?.jsonObject?.get("nodes")?.jsonArray
-            fields?.forEach { fieldEl ->
+            element["fieldValues"]?.jsonObject?.get("nodes")?.jsonArray?.forEach { fieldEl ->
                 if (fieldEl !is JsonObject) return@forEach
                 when (fieldEl["field"]?.takeUnless { it is JsonNull }?.jsonObject?.get("name").textOrNull()) {
                     "Status" -> fieldEl["name"].textOrNull()?.let { status = it }
                     "Due" -> due = fieldEl["date"].textOrNull()
                 }
             }
-            TaskCard(id, title, status, due)
+            TaskCard(id, title, status, due, issueNumber, contentId)
         }
     }
 }
 
-data class Notice(val id: String, val title: String, val body: String)
+data class Notice(val id: String, val title: String, val body: String, val authorLogin: String? = null)
 
 class DiscussionsClient(
     private val transport: HttpTransport,
@@ -149,59 +411,177 @@ class DiscussionsClient(
     private val json = Json { ignoreUnknownKeys = true }
 
     fun listNotices(owner: String, repo: String, token: String): List<Notice> {
-        val query = """
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
             query(${'$'}owner:String!,${'$'}name:String!){
               repository(owner:${'$'}owner,name:${'$'}name){
-                discussions(first:20){ nodes { id title body } }
+                discussions(first:20){ nodes { id title body author { login } } }
               }
             }
-        """.trimIndent()
-        val body = buildJsonObject {
-            put("query", query)
-            putJsonObject("variables") {
+            """.trimIndent(),
+            buildJsonObject {
                 put("owner", owner)
                 put("name", repo)
-            }
-        }.toString()
-        val result = transport.exchange(
-            "POST",
-            "$apiBase/graphql",
-            mapOf(
-                "Authorization" to "Bearer $token",
-                "Content-Type" to "application/json",
-            ),
-            body,
+            },
         )
-        require(result.status in 200..299) { "github http ${result.status}" }
-        val repository = json.parseToJsonElement(result.body).jsonObject["data"]
-            ?.jsonObject?.get("repository") ?: return emptyList()
+        val repository = root["data"]?.jsonObject?.get("repository") ?: return emptyList()
         if (repository is JsonNull) return emptyList()
         val nodes = repository.jsonObject["discussions"]?.jsonObject?.get("nodes")?.jsonArray
             ?: return emptyList()
         return nodes.mapNotNull { element ->
             if (element !is JsonObject) return@mapNotNull null
             val id = element["id"].textOrNull() ?: return@mapNotNull null
-            Notice(id, element["title"].textOrNull().orEmpty(), element["body"].textOrNull().orEmpty())
+            Notice(
+                id,
+                element["title"].textOrNull().orEmpty(),
+                element["body"].textOrNull().orEmpty(),
+                element["author"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull(),
+            )
         }
     }
 
-    fun vote(pollOptionId: String, token: String) {
-        val body = buildJsonObject {
-            put("query", "mutation(\$input:AddDiscussionPollVoteInput!){ addDiscussionPollVote(input:\$input){ pollOption { id } } }")
-            putJsonObject("variables") {
-                putJsonObject("input") { put("pollOptionId", pollOptionId) }
+    fun getNotice(id: String, token: String): Notice {
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            query(${'$'}id:ID!){
+              node(id:${'$'}id){
+                ... on Discussion { id title body author { login } }
+              }
             }
-        }.toString()
-        val result = transport.exchange(
-            "POST",
-            "$apiBase/graphql",
-            mapOf(
-                "Authorization" to "Bearer $token",
-                "Content-Type" to "application/json",
-            ),
-            body,
+            """.trimIndent(),
+            buildJsonObject { put("id", id) },
         )
-        require(result.status in 200..299)
+        val node = root["data"]?.jsonObject?.get("node")?.jsonObject ?: error("missing notice")
+        return Notice(
+            node["id"].textOrNull().orEmpty(),
+            node["title"].textOrNull().orEmpty(),
+            node["body"].textOrNull().orEmpty(),
+            node["author"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull(),
+        )
+    }
+
+    fun resolveSetup(owner: String, repo: String, token: String): DiscussionSetup {
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            query(${'$'}owner:String!,${'$'}name:String!){
+              repository(owner:${'$'}owner,name:${'$'}name){
+                id
+                discussionCategories(first:20){ nodes { id name } }
+              }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                put("owner", owner)
+                put("name", repo)
+            },
+        )
+        val repository = root["data"]?.jsonObject?.get("repository")?.jsonObject
+            ?: error("missing repository")
+        val repoId = repository["id"].textOrNull() ?: error("missing repository id")
+        val categories = repository["discussionCategories"]?.jsonObject?.get("nodes")?.jsonArray.orEmpty()
+            .mapNotNull { el ->
+                val o = el as? JsonObject ?: return@mapNotNull null
+                val id = o["id"].textOrNull() ?: return@mapNotNull null
+                id to o["name"].textOrNull().orEmpty()
+            }
+        val preferred = categories.firstOrNull { it.second.contains("공지") }
+            ?: categories.firstOrNull()
+            ?: error("no discussion category")
+        return DiscussionSetup(repoId, preferred.first)
+    }
+
+    fun createNotice(repositoryId: String, categoryId: String, title: String, body: String, token: String): Notice {
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            mutation(${'$'}input:CreateDiscussionInput!){
+              createDiscussion(input:${'$'}input){ discussion { id title body author { login } } }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                putJsonObject("input") {
+                    put("repositoryId", repositoryId)
+                    put("categoryId", categoryId)
+                    put("title", title)
+                    put("body", body)
+                }
+            },
+        )
+        val d = root["data"]?.jsonObject?.get("createDiscussion")?.jsonObject?.get("discussion")?.jsonObject
+            ?: error("create failed")
+        return Notice(
+            d["id"].textOrNull().orEmpty(),
+            d["title"].textOrNull().orEmpty(),
+            d["body"].textOrNull().orEmpty(),
+            d["author"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull(),
+        )
+    }
+
+    fun updateNotice(id: String, title: String, body: String, token: String): Notice {
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            mutation(${'$'}input:UpdateDiscussionInput!){
+              updateDiscussion(input:${'$'}input){ discussion { id title body author { login } } }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                putJsonObject("input") {
+                    put("discussionId", id)
+                    put("title", title)
+                    put("body", body)
+                }
+            },
+        )
+        val d = root["data"]?.jsonObject?.get("updateDiscussion")?.jsonObject?.get("discussion")?.jsonObject
+            ?: error("update failed")
+        return Notice(
+            d["id"].textOrNull().orEmpty(),
+            d["title"].textOrNull().orEmpty(),
+            d["body"].textOrNull().orEmpty(),
+            d["author"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull(),
+        )
+    }
+
+    fun deleteNotice(id: String, token: String) {
+        Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            mutation(${'$'}input:DeleteDiscussionInput!){
+              deleteDiscussion(input:${'$'}input){ discussion { id } }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                putJsonObject("input") { put("id", id) }
+            },
+        )
+    }
+
+    fun vote(pollOptionId: String, token: String) {
+        Graphql.post(
+            transport,
+            apiBase,
+            token,
+            "mutation(\$input:AddDiscussionPollVoteInput!){ addDiscussionPollVote(input:\$input){ pollOption { id } } }",
+            buildJsonObject {
+                putJsonObject("input") { put("pollOptionId", pollOptionId) }
+            },
+        )
     }
 }
 
@@ -246,6 +626,28 @@ object IssueFormParser {
     }
 }
 
+class IssueFormsClient(
+    private val transport: HttpTransport,
+    private val apiBase: String = "https://api.github.com",
+) {
+    fun createIssue(owner: String, repo: String, title: String, body: String, token: String): Int {
+        val result = transport.rest(
+            "POST",
+            "$apiBase/repos/$owner/$repo/issues",
+            token,
+            buildJsonObject {
+                put("title", title)
+                put("body", body)
+            }.toString(),
+        )
+        require(result.status in 200..299) { "github http ${result.status}" }
+        return Json { ignoreUnknownKeys = true }
+            .parseToJsonElement(result.body).jsonObject["number"]
+            ?.jsonPrimitive?.content?.toIntOrNull()
+            ?: error("missing number")
+    }
+}
+
 data class ThreadMessage(val id: String, val body: String, val author: String)
 
 object DiscordDeepLink {
@@ -260,25 +662,70 @@ class ThreadTalkClient(
     private val json = Json { ignoreUnknownKeys = true }
 
     fun listIssueComments(owner: String, repo: String, issueNumber: Int, token: String): List<ThreadMessage> {
-        val result = transport.exchange(
+        val result = transport.rest(
             "GET",
             "$apiBase/repos/$owner/$repo/issues/$issueNumber/comments",
-            mapOf(
-                "Authorization" to "Bearer $token",
-                "Accept" to "application/vnd.github+json",
-                "X-GitHub-Api-Version" to "2022-11-28",
-            ),
-            null,
+            token,
         )
         require(result.status in 200..299) { "github http ${result.status}" }
         if (result.body.isBlank()) return emptyList()
-        val nodes = json.parseToJsonElement(result.body).jsonArray
-        return nodes.mapNotNull { element ->
+        return json.parseToJsonElement(result.body).jsonArray.mapNotNull { element ->
             if (element !is JsonObject) return@mapNotNull null
             val id = element["id"].textOrNull() ?: return@mapNotNull null
             val author = element["user"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull().orEmpty()
             ThreadMessage(id, element["body"].textOrNull().orEmpty(), author)
         }
+    }
+
+    fun postComment(owner: String, repo: String, issueNumber: Int, body: String, token: String): ThreadMessage {
+        val result = transport.rest(
+            "POST",
+            "$apiBase/repos/$owner/$repo/issues/$issueNumber/comments",
+            token,
+            buildJsonObject { put("body", body) }.toString(),
+        )
+        require(result.status in 200..299) { "github http ${result.status}" }
+        val o = json.parseToJsonElement(result.body).jsonObject
+        return ThreadMessage(
+            o["id"].textOrNull().orEmpty(),
+            o["body"].textOrNull().orEmpty(),
+            o["user"]?.jsonObject?.get("login").textOrNull().orEmpty(),
+        )
+    }
+
+    fun updateComment(owner: String, repo: String, commentId: String, body: String, token: String): ThreadMessage {
+        val result = transport.rest(
+            "PATCH",
+            "$apiBase/repos/$owner/$repo/issues/comments/$commentId",
+            token,
+            buildJsonObject { put("body", body) }.toString(),
+        )
+        require(result.status in 200..299) { "github http ${result.status}" }
+        val o = json.parseToJsonElement(result.body).jsonObject
+        return ThreadMessage(
+            o["id"].textOrNull().orEmpty(),
+            o["body"].textOrNull().orEmpty(),
+            o["user"]?.jsonObject?.get("login").textOrNull().orEmpty(),
+        )
+    }
+
+    fun deleteComment(owner: String, repo: String, commentId: String, token: String) {
+        val result = transport.rest(
+            "DELETE",
+            "$apiBase/repos/$owner/$repo/issues/comments/$commentId",
+            token,
+        )
+        require(result.status in 200..299) { "github http ${result.status}" }
+    }
+
+    fun addReaction(owner: String, repo: String, commentId: String, content: String, token: String) {
+        val result = transport.rest(
+            "POST",
+            "$apiBase/repos/$owner/$repo/issues/comments/$commentId/reactions",
+            token,
+            buildJsonObject { put("content", content) }.toString(),
+        )
+        require(result.status in 200..299) { "github http ${result.status}" }
     }
 }
 

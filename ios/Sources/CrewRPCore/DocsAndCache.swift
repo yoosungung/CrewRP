@@ -48,15 +48,50 @@ public struct ETagRESTClient: Sendable {
 public struct DocFile: Sendable, Equatable {
     public let path: String
     public let content: String
+    public let sha: String?
+
+    public init(path: String, content: String, sha: String? = nil) {
+        self.path = path
+        self.content = content
+        self.sha = sha
+    }
+}
+
+public struct DocEntry: Sendable, Equatable {
+    public let path: String
+    public let name: String
+    public let sha: String?
+    public let isDir: Bool
 }
 
 public struct DocsClient: Sendable {
+    private let transport: any HTTPTransport
     private let rest: ETagRESTClient
     private let apiBase: URL
 
-    public init(rest: ETagRESTClient, apiBase: URL = URL(string: "https://api.github.com")!) {
-        self.rest = rest
+    public init(transport: any HTTPTransport, cache: CacheStore, apiBase: URL = URL(string: "https://api.github.com")!) {
+        self.transport = transport
+        self.rest = ETagRESTClient(transport: transport, cache: cache)
         self.apiBase = apiBase
+    }
+
+    public func listDocs(owner: String, repo: String, token: String, path: String = "docs") async throws -> [DocEntry] {
+        var request = URLRequest(url: apiBase.appending(path: "repos/\(owner)/\(repo)/contents/\(path)"))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await transport.data(for: request)
+        if response.statusCode == 404 { return [] }
+        guard (200..<300).contains(response.statusCode) else {
+            throw GitHubAPIError.httpStatus(response.statusCode)
+        }
+        struct Entry: Decodable {
+            let path: String
+            let name: String
+            let sha: String?
+            let type: String
+        }
+        let entries = try JSONDecoder().decode([Entry].self, from: data)
+        return entries.map { DocEntry(path: $0.path, name: $0.name, sha: $0.sha, isDir: $0.type == "dir") }
     }
 
     public func fetchMarkdown(owner: String, repo: String, path: String, token: String) async throws -> DocFile {
@@ -66,6 +101,7 @@ public struct DocsClient: Sendable {
             let path: String
             let content: String?
             let encoding: String?
+            let sha: String?
         }
         let dto = try JSONDecoder().decode(ContentDTO.self, from: response.body)
         guard dto.encoding == "base64", let raw = dto.content else {
@@ -75,6 +111,43 @@ public struct DocsClient: Sendable {
         guard let data = Data(base64Encoded: cleaned), let text = String(data: data, encoding: .utf8) else {
             throw GitHubAPIError.invalidResponse
         }
-        return DocFile(path: dto.path, content: text)
+        return DocFile(path: dto.path, content: text, sha: dto.sha)
+    }
+
+    public func saveMarkdown(owner: String, repo: String, path: String, content: String, token: String, sha: String?) async throws -> DocFile {
+        guard path.hasPrefix("docs/") else { throw GitHubAPIError.invalidResponse }
+        var request = URLRequest(url: apiBase.appending(path: "repos/\(owner)/\(repo)/contents/\(path)"))
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let encoded = Data(content.utf8).base64EncodedString()
+        var payload: [String: Any] = ["message": "자료 저장", "content": encoded]
+        if let sha { payload["sha"] = sha }
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, response) = try await transport.data(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            throw GitHubAPIError.httpStatus(response.statusCode)
+        }
+        struct Envelope: Decodable {
+            struct Content: Decodable { let sha: String? }
+            let content: Content
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        return DocFile(path: path, content: content, sha: env.content.sha)
+    }
+
+    public func deleteDoc(owner: String, repo: String, path: String, sha: String, token: String) async throws {
+        guard path.hasPrefix("docs/") else { throw GitHubAPIError.invalidResponse }
+        var request = URLRequest(url: apiBase.appending(path: "repos/\(owner)/\(repo)/contents/\(path)"))
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["message": "자료 삭제", "sha": sha])
+        let (_, response) = try await transport.data(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            throw GitHubAPIError.httpStatus(response.statusCode)
+        }
     }
 }

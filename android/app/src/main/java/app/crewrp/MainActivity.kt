@@ -28,6 +28,7 @@ import app.crewrp.core.Session
 import app.crewrp.core.TokenStore
 import app.crewrp.core.UrlHttpTransport
 import app.crewrp.core.discordConfigured
+import app.crewrp.ui.CrewActions
 import app.crewrp.ui.CrewRPTheme
 import app.crewrp.ui.CrewShell
 import app.crewrp.ui.CrewStartScreen
@@ -158,22 +159,95 @@ class MainActivity : ComponentActivity() {
 
             CrewRPTheme {
                 when {
-                    active != null -> CrewShell(
-                        session = active,
-                        content = content,
-                        discordEnabled = discordConfigured(
-                            BuildConfig.DISCORD_SERVER_ID,
-                            BuildConfig.DISCORD_CHANNEL_ID,
-                        ),
-                        onRefresh = { refreshTick += 1 },
-                        onDiscord = {
-                            val url = DiscordDeepLink.voiceChannelUrl(
+                    active != null -> {
+                        fun runWrite(refresh: Boolean = true, block: (CrewWriter) -> Unit) {
+                            val token = tokens.loadAccessToken() ?: return
+                            thread {
+                                runCatching {
+                                    block(
+                                        CrewWriter(
+                                            active,
+                                            token,
+                                            cache,
+                                            BuildConfig.PROJECT_NUMBER.toIntOrNull() ?: 1,
+                                        ),
+                                    )
+                                }.onSuccess {
+                                    runOnUiThread {
+                                        content = content.copy(writeError = null)
+                                        if (refresh) refreshTick += 1
+                                    }
+                                }.onFailure { err ->
+                                    Log.e("CrewRP", "write failed", err)
+                                    runOnUiThread {
+                                        content = content.copy(writeError = "저장하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+                                    }
+                                }
+                            }
+                        }
+                        CrewShell(
+                            session = active,
+                            content = content,
+                            discordEnabled = discordConfigured(
                                 BuildConfig.DISCORD_SERVER_ID,
                                 BuildConfig.DISCORD_CHANNEL_ID,
-                            )
-                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                        },
-                    )
+                            ),
+                            actions = CrewActions(
+                                onCreateNotice = { title, body ->
+                                    val setup = content.discussionSetup ?: return@CrewActions
+                                    runWrite { it.createNotice(title, body, setup) }
+                                },
+                                onUpdateNotice = { notice, title, body ->
+                                    runWrite { it.updateNotice(notice.id, title, body) }
+                                },
+                                onDeleteNotice = { notice -> runWrite { it.deleteNotice(notice.id) } },
+                                onCreateTask = { title, due -> runWrite { it.createTask(title, due) } },
+                                onUpdateTask = { card, status, due ->
+                                    val meta = content.projectMeta ?: return@CrewActions
+                                    runWrite { it.updateTask(meta, card, status, due) }
+                                },
+                                onDeleteTask = { card ->
+                                    val meta = content.projectMeta ?: return@CrewActions
+                                    runWrite { it.deleteTask(meta, card) }
+                                },
+                                onSaveDoc = { path, text ->
+                                    runWrite {
+                                        it.saveDoc(path, text, if (path == content.docPath) content.docSha else null)
+                                    }
+                                },
+                                onDeleteDoc = {
+                                    val sha = content.docSha ?: return@CrewActions
+                                    runWrite { it.deleteDoc(content.docPath, sha) }
+                                },
+                                onOpenDoc = { path ->
+                                    runWrite(refresh = false) { writer ->
+                                        val file = writer.openDoc(path)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                docPath = file.path,
+                                                doc = file.content,
+                                                docSha = file.sha,
+                                                docFailed = false,
+                                                writeError = null,
+                                            )
+                                        }
+                                    }
+                                },
+                                onPostTalk = { body -> runWrite { it.postTalk(body) } },
+                                onUpdateTalk = { msg, body -> runWrite { it.updateTalk(msg.id, body) } },
+                                onDeleteTalk = { msg -> runWrite { it.deleteTalk(msg.id) } },
+                                onReactTalk = { msg -> runWrite { it.reactTalk(msg.id) } },
+                            ),
+                            onRefresh = { refreshTick += 1 },
+                            onDiscord = {
+                                val url = DiscordDeepLink.voiceChannelUrl(
+                                    BuildConfig.DISCORD_SERVER_ID,
+                                    BuildConfig.DISCORD_CHANNEL_ID,
+                                )
+                                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            },
+                        )
+                    }
                     repos.isNotEmpty() -> CrewStartScreen(repos, error) { repo ->
                         error = null
                         thread {

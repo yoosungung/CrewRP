@@ -338,7 +338,7 @@ struct CrewRegistrationFixtureTests {
             let body = try JSONSerialization.data(withJSONObject: payload)
             return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["ETag": "\"d1\""])!)
         }
-        let doc = try await DocsClient(rest: ETagRESTClient(transport: transport, cache: cache))
+        let doc = try await DocsClient(transport: transport, cache: cache)
             .fetchMarkdown(owner: "crew", repo: "box", path: "docs/README.md", token: "t")
         #expect(doc.content.contains("자료실"))
     }
@@ -389,5 +389,12 @@ struct ShellPresentationTests {
     func blocks() {
         let blocks = docBlocks("# 정관\n\n첫 문단\n이어짐\n\n- 하나\n")
         #expect(blocks == [.heading("정관"), .paragraph("첫 문단 이어짐"), .bullet("하나")])
+    }
+
+    @Test("canMutate allows admin or author")
+    func mutate() {
+        #expect(canMutate(role: .admin, authorLogin: "other", currentLogin: "me"))
+        #expect(canMutate(role: .member, authorLogin: "me", currentLogin: "me"))
+        #expect(!canMutate(role: .member, authorLogin: "other", currentLogin: "me"))
     }
 }

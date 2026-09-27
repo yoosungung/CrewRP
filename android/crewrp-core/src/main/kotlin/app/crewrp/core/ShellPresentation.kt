@@ -17,6 +17,13 @@ fun taskLane(status: String): TaskLane {
 
 fun roleLabel(role: TeamRole): String = if (role == TeamRole.ADMIN) "운영진" else "멤버"
 
+/** 운영진은 전부, 멤버는 본인 작성분만 수정·삭제. */
+fun canMutate(role: TeamRole, authorLogin: String?, currentLogin: String?): Boolean {
+    if (role == TeamRole.ADMIN) return true
+    if (currentLogin.isNullOrBlank() || authorLogin.isNullOrBlank()) return false
+    return authorLogin.equals(currentLogin, ignoreCase = true)
+}
+
 fun crewDisplayName(repo: String): String = repo.substringAfter('/', repo).ifBlank { repo }
 
 fun crewOwnerName(repo: String): String = if ('/' in repo) repo.substringBefore('/') else ""

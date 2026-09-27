@@ -21,12 +21,19 @@ final class AppModel: ObservableObject {
     @Published var tasks: [TaskCard] = []
     @Published var notices: [Notice] = []
     @Published var docPreview: String = ""
+    @Published var docPath: String = "docs/README.md"
+    @Published var docSha: String?
+    @Published var docs: [DocEntry] = []
     @Published var threadMessages: [ThreadMessage] = []
     @Published var isLoading = false
     @Published var tasksFailed = false
     @Published var noticesFailed = false
     @Published var docFailed = false
     @Published var threadsFailed = false
+    @Published var writeError: String?
+    @Published var currentLogin: String?
+    @Published var projectMeta: ProjectFieldMeta?
+    @Published var discussionSetup: DiscussionSetup?
     private var didRegisterPush = false
 
     private let flow: AuthFlow
@@ -34,6 +41,17 @@ final class AppModel: ObservableObject {
     private let tokens: KeychainTokenStore
     private let transport = URLSessionTransport()
     private var webSession: ASWebAuthenticationSession?
+
+    private var projectNumber: Int {
+        Int(Bundle.main.object(forInfoDictionaryKey: "ProjectNumber") as? String ?? "1") ?? 1
+    }
+
+    private var repoParts: (owner: String, repo: String)? {
+        guard let session else { return nil }
+        let parts = session.repo.split(separator: "/")
+        guard parts.count == 2 else { return nil }
+        return (String(parts[0]), String(parts[1]))
+    }
 
     init() {
         let cacheURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -98,38 +116,42 @@ final class AppModel: ObservableObject {
     }
 
     func refreshHomeData() async {
-        guard let session, let token = try? tokens.loadAccessToken() else { return }
-        let parts = session.repo.split(separator: "/")
-        guard parts.count == 2 else { return }
-        let owner = String(parts[0])
-        let repo = String(parts[1])
-        let projectNumber = Int(Bundle.main.object(forInfoDictionaryKey: "ProjectNumber") as? String ?? "1") ?? 1
+        guard let session, let token = try? tokens.loadAccessToken(), let parts = repoParts else { return }
+        let owner = parts.owner
+        let repo = parts.repo
         isLoading = true
         defer { isLoading = false }
+
+        currentLogin = try? await GitHubMembershipClient(transport: transport).currentUser(token: token).login
 
         do {
             let projects = ProjectsClient(transport: transport)
             tasks = try await projects.sortedByDueDate(
                 projects.listTasks(org: session.org, projectNumber: projectNumber, token: token)
             )
+            projectMeta = try? await projects.loadFieldMeta(owner: session.org, projectNumber: projectNumber, token: token)
             tasksFailed = false
         } catch {
             tasksFailed = true
         }
 
         do {
-            notices = try await DiscussionsClient(transport: transport)
-                .listNotices(owner: owner, repo: repo, token: token)
+            let discussions = DiscussionsClient(transport: transport)
+            notices = try await discussions.listNotices(owner: owner, repo: repo, token: token)
+            discussionSetup = try? await discussions.resolveSetup(owner: owner, repo: repo, token: token)
             noticesFailed = false
         } catch {
             noticesFailed = true
         }
 
         do {
-            let rest = ETagRESTClient(transport: transport, cache: cache)
-            docPreview = try await DocsClient(rest: rest)
-                .fetchMarkdown(owner: owner, repo: repo, path: "docs/README.md", token: token)
-                .content
+            let docsClient = DocsClient(transport: transport, cache: cache)
+            docs = (try? await docsClient.listDocs(owner: owner, repo: repo, token: token)) ?? []
+            let path = docs.first(where: { !$0.isDir && $0.name.lowercased() == "readme.md" })?.path ?? docPath
+            let file = try await docsClient.fetchMarkdown(owner: owner, repo: repo, path: path, token: token)
+            docPath = file.path
+            docPreview = file.content
+            docSha = file.sha
             docFailed = false
         } catch {
             docFailed = true
@@ -146,6 +168,131 @@ final class AppModel: ObservableObject {
         if !didRegisterPush {
             didRegisterPush = true
             await registerPushDevice()
+        }
+    }
+
+    private func withToken(_ work: (String, String, String) async throws -> Void) async {
+        guard let token = try? tokens.loadAccessToken(), let parts = repoParts else { return }
+        do {
+            try await work(token, parts.owner, parts.repo)
+            writeError = nil
+            await refreshHomeData()
+        } catch {
+            writeError = "저장하지 못했습니다. 잠시 후 다시 시도해 주세요."
+        }
+    }
+
+    func createNotice(title: String, body: String) async {
+        guard let setup = discussionSetup else { return }
+        await withToken { token, _, _ in
+            _ = try await DiscussionsClient(transport: transport)
+                .createNotice(repositoryId: setup.repositoryId, categoryId: setup.categoryId, title: title, body: body, token: token)
+        }
+    }
+
+    func updateNotice(_ notice: Notice, title: String, body: String) async {
+        await withToken { token, _, _ in
+            _ = try await DiscussionsClient(transport: transport).updateNotice(id: notice.id, title: title, body: body, token: token)
+        }
+    }
+
+    func deleteNotice(_ notice: Notice) async {
+        await withToken { token, _, _ in
+            try await DiscussionsClient(transport: transport).deleteNotice(id: notice.id, token: token)
+        }
+    }
+
+    func createTask(title: String, dueOn: String?) async {
+        await withToken { token, owner, repo in
+            _ = try await ProjectsClient(transport: transport).createTask(
+                owner: owner, repo: repo, title: title, body: "", projectNumber: projectNumber, token: token, dueOn: dueOn
+            )
+        }
+    }
+
+    func updateTask(_ card: TaskCard, status: String) async {
+        guard let meta = projectMeta else { return }
+        let opt = meta.statusOptions.first { key, _ in
+            key == status || taskLane(status: key) == taskLane(status: status)
+        }?.value
+        await withToken { token, _, _ in
+            try await ProjectsClient(transport: transport).updateTaskFields(
+                projectId: meta.projectId,
+                itemId: card.id,
+                statusFieldId: meta.statusFieldId,
+                statusOptionId: opt,
+                dueFieldId: nil,
+                dueOn: nil,
+                token: token
+            )
+        }
+    }
+
+    func deleteTask(_ card: TaskCard) async {
+        guard let meta = projectMeta else { return }
+        await withToken { token, owner, repo in
+            try await ProjectsClient(transport: transport).deleteTask(
+                projectId: meta.projectId, itemId: card.id, owner: owner, repo: repo, issueNumber: card.issueNumber, token: token
+            )
+        }
+    }
+
+    func saveDoc(path: String, content: String) async {
+        await withToken { token, owner, repo in
+            let p = path.hasPrefix("docs/") ? path : "docs/\(path)"
+            let sha = p == docPath ? docSha : nil
+            _ = try await DocsClient(transport: transport, cache: cache)
+                .saveMarkdown(owner: owner, repo: repo, path: p, content: content, token: token, sha: sha)
+        }
+    }
+
+    func openDoc(path: String) async {
+        guard let token = try? tokens.loadAccessToken(), let parts = repoParts else { return }
+        do {
+            let file = try await DocsClient(transport: transport, cache: cache)
+                .fetchMarkdown(owner: parts.owner, repo: parts.repo, path: path, token: token)
+            docPath = file.path
+            docPreview = file.content
+            docSha = file.sha
+            docFailed = false
+        } catch {
+            writeError = "저장하지 못했습니다. 잠시 후 다시 시도해 주세요."
+        }
+    }
+
+    func deleteDoc() async {
+        guard let sha = docSha else { return }
+        await withToken { token, owner, repo in
+            try await DocsClient(transport: transport, cache: cache)
+                .deleteDoc(owner: owner, repo: repo, path: docPath, sha: sha, token: token)
+        }
+    }
+
+    func postTalk(_ body: String) async {
+        await withToken { token, owner, repo in
+            _ = try await ThreadTalkClient(transport: transport)
+                .postComment(owner: owner, repo: repo, issueNumber: 1, body: body, token: token)
+        }
+    }
+
+    func updateTalk(_ message: ThreadMessage, body: String) async {
+        await withToken { token, owner, repo in
+            _ = try await ThreadTalkClient(transport: transport)
+                .updateComment(owner: owner, repo: repo, commentId: message.id, body: body, token: token)
+        }
+    }
+
+    func deleteTalk(_ message: ThreadMessage) async {
+        await withToken { token, owner, repo in
+            try await ThreadTalkClient(transport: transport)
+                .deleteComment(owner: owner, repo: repo, commentId: message.id, token: token)
+        }
+    }
+
+    func reactTalk(_ message: ThreadMessage) async {
+        await withToken { token, owner, repo in
+            try await ThreadTalkClient(transport: transport)
+                .addReaction(owner: owner, repo: repo, commentId: message.id, content: "+1", token: token)
         }
     }
 
@@ -273,6 +420,8 @@ private struct LoginView: View {
 
 private struct HomeTab: View {
     @ObservedObject var model: AppModel
+    @State private var composing = false
+    @State private var editing: Notice?
 
     var body: some View {
         NavigationStack {
@@ -282,9 +431,12 @@ private struct HomeTab: View {
                 } else if homeQuiet && (model.tasksFailed || model.noticesFailed) {
                     FailedHint { await model.refreshHomeData() }
                 } else if homeQuiet {
-                    EmptyHint(title: "아직 소식이 없습니다", message: "공지와 할 일이 생기면 홈에 모입니다.")
+                    EmptyHint(title: "아직 소식이 없습니다", message: "+ 로 공지를 작성하세요.")
                 } else {
                     List {
+                        if let err = model.writeError {
+                            Section { Text(err).foregroundStyle(.red) }
+                        }
                         if let session = model.session {
                             Section {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -294,37 +446,54 @@ private struct HomeTab: View {
                                 }
                             }
                         }
-                        if model.tasksFailed || model.noticesFailed {
-                            Section { Text("최신 내용을 불러오지 못했습니다").foregroundStyle(.red) }
-                        }
                         if !sections.today.isEmpty {
-                            Section("오늘 할 일") {
-                                ForEach(sections.today, id: \.id) { TaskRow(task: $0) }
-                            }
+                            Section("오늘 할 일") { ForEach(sections.today, id: \.id) { TaskRow(task: $0) } }
                         }
                         if !sections.notices.isEmpty {
                             Section("고정 공지") {
                                 ForEach(sections.notices, id: \.id) { notice in
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(notice.title).font(.headline)
-                                        if !notice.body.isEmpty {
-                                            Text(notice.body).font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+                                    Button { editing = notice } label: {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(notice.title).font(.headline).foregroundStyle(.primary)
+                                            if !notice.body.isEmpty {
+                                                Text(notice.body).font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                         if !sections.upcoming.isEmpty {
-                            Section("다가오는 할 일") {
-                                ForEach(sections.upcoming, id: \.id) { TaskRow(task: $0) }
-                            }
+                            Section("다가오는 할 일") { ForEach(sections.upcoming, id: \.id) { TaskRow(task: $0) } }
                         }
                     }
                 }
             }
             .navigationTitle(model.session.map { crewDisplayName($0.repo) } ?? "홈")
-            .toolbar { RefreshButton(model: model) }
+            .toolbar {
+                RefreshButton(model: model)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { composing = true } label: { Image(systemName: "plus") }
+                }
+            }
             .refreshable { await model.refreshHomeData() }
+            .sheet(isPresented: $composing) {
+                ComposeSheet(title: "공지 작성", titleLabel: "제목", bodyLabel: "본문") { t, b in
+                    Task { await model.createNotice(title: t, body: b) }
+                }
+            }
+            .sheet(item: $editing) { notice in
+                ComposeSheet(
+                    title: "공지 수정",
+                    titleLabel: "제목",
+                    bodyLabel: "본문",
+                    initialTitle: notice.title,
+                    initialBody: notice.body,
+                    showDelete: canMutate(role: model.session?.teamRole ?? .none, authorLogin: notice.authorLogin, currentLogin: model.currentLogin),
+                    onSave: { t, b in Task { await model.updateNotice(notice, title: t, body: b) } },
+                    onDelete: { Task { await model.deleteNotice(notice) } }
+                )
+            }
         }
     }
 
@@ -340,6 +509,8 @@ private struct HomeTab: View {
 private struct TasksTab: View {
     @ObservedObject var model: AppModel
     @State private var mode = 0
+    @State private var composing = false
+    @State private var editing: TaskCard?
 
     var body: some View {
         NavigationStack {
@@ -349,9 +520,12 @@ private struct TasksTab: View {
                 } else if model.tasksFailed && model.tasks.isEmpty {
                     FailedHint { await model.refreshHomeData() }
                 } else if model.tasks.isEmpty {
-                    EmptyHint(title: "아직 할 일이 없습니다", message: "접수된 일이 생기면 칸반에 올라옵니다.")
+                    EmptyHint(title: "아직 할 일이 없습니다", message: "+ 로 새 할 일을 추가하세요.")
                 } else {
                     VStack(spacing: 0) {
+                        if let err = model.writeError {
+                            Text(err).font(.footnote).foregroundStyle(.red).padding(.top, 8)
+                        }
                         Picker("보기", selection: $mode) {
                             Text("칸반").tag(0)
                             Text("마감일").tag(1)
@@ -359,9 +533,11 @@ private struct TasksTab: View {
                         .pickerStyle(.segmented)
                         .padding()
                         if mode == 0 {
-                            KanbanBoard(tasks: model.tasks)
+                            KanbanBoard(tasks: model.tasks) { editing = $0 }
                         } else {
-                            List(model.tasks, id: \.id) { TaskRow(task: $0) }
+                            List(model.tasks, id: \.id) { task in
+                                Button { editing = task } label: { TaskRow(task: task) }
+                            }
                         }
                     }
                 }
@@ -369,14 +545,38 @@ private struct TasksTab: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(.systemGroupedBackground))
             .navigationTitle("할 일")
-            .toolbar { RefreshButton(model: model) }
+            .toolbar {
+                RefreshButton(model: model)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { composing = true } label: { Image(systemName: "plus") }
+                }
+            }
             .refreshable { await model.refreshHomeData() }
+            .sheet(isPresented: $composing) {
+                ComposeSheet(title: "할 일 추가", titleLabel: "제목", bodyLabel: "마감 (YYYY-MM-DD)", initialBody: "") { t, due in
+                    Task { await model.createTask(title: t, dueOn: due.isEmpty ? nil : due) }
+                }
+            }
+            .sheet(item: $editing) { task in
+                ComposeSheet(
+                    title: "할 일 수정",
+                    titleLabel: "제목",
+                    bodyLabel: "상태 (접수/진행 중/완료)",
+                    initialTitle: task.title,
+                    initialBody: task.status,
+                    titleEnabled: false,
+                    showDelete: model.session?.teamRole == .admin,
+                    onSave: { _, status in Task { await model.updateTask(task, status: status) } },
+                    onDelete: { Task { await model.deleteTask(task) } }
+                )
+            }
         }
     }
 }
 
 private struct KanbanBoard: View {
     let tasks: [TaskCard]
+    var onSelect: (TaskCard) -> Void = { _ in }
 
     var body: some View {
         ScrollView(.horizontal) {
@@ -389,10 +589,9 @@ private struct KanbanBoard: View {
                             Spacer()
                             Text("\(laneTasks.count)").foregroundStyle(.secondary)
                         }
-                        if laneTasks.isEmpty {
-                            Text("없음").font(.subheadline).foregroundStyle(.secondary)
+                        ForEach(laneTasks, id: \.id) { task in
+                            Button { onSelect(task) } label: { TaskRow(task: task) }
                         }
-                        ForEach(laneTasks, id: \.id) { TaskRow(task: $0) }
                     }
                     .padding(12)
                     .frame(width: 260, alignment: .topLeading)
@@ -406,6 +605,9 @@ private struct KanbanBoard: View {
 
 private struct DocsTab: View {
     @ObservedObject var model: AppModel
+    @State private var composing = false
+    @State private var editing = false
+    @State private var draft = ""
 
     var body: some View {
         NavigationStack {
@@ -414,22 +616,25 @@ private struct DocsTab: View {
                     ProgressView()
                 } else if model.docFailed && model.docPreview.isEmpty {
                     FailedHint { await model.refreshHomeData() }
+                } else if editing {
+                    TextEditor(text: $draft).padding()
                 } else if docBlocks(model.docPreview).isEmpty {
-                    EmptyHint(title: "자료실이 비어 있습니다", message: "정관과 규정이 올라오면 여기에 보입니다.")
+                    EmptyHint(title: "자료실이 비어 있습니다", message: "+ 로 자료를 추가하세요.")
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
-                            if model.docFailed {
-                                Text("최신 내용을 불러오지 못했습니다").font(.footnote).foregroundStyle(.red)
+                            ScrollView(.horizontal) {
+                                HStack {
+                                    ForEach(model.docs.filter { !$0.isDir }, id: \.path) { entry in
+                                        Button(entry.name) { Task { await model.openDoc(path: entry.path) } }
+                                    }
+                                }
                             }
                             ForEach(Array(docBlocks(model.docPreview).enumerated()), id: \.offset) { _, block in
                                 switch block {
-                                case .heading(let text):
-                                    Text(text).font(.title2.bold()).padding(.top, 8)
-                                case .bullet(let text):
-                                    Text("·  \(text)")
-                                case .paragraph(let text):
-                                    Text(text)
+                                case .heading(let text): Text(text).font(.title2.bold()).padding(.top, 8)
+                                case .bullet(let text): Text("·  \(text)")
+                                case .paragraph(let text): Text(text)
                                 }
                             }
                         }
@@ -440,14 +645,43 @@ private struct DocsTab: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("자료실")
-            .toolbar { RefreshButton(model: model) }
+            .toolbar {
+                RefreshButton(model: model)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { composing = true } label: { Image(systemName: "plus") }
+                }
+                if editing {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("저장") {
+                            Task {
+                                await model.saveDoc(path: model.docPath, content: draft)
+                                editing = false
+                            }
+                        }
+                    }
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("편집") {
+                            draft = model.docPreview
+                            editing = true
+                        }
+                    }
+                }
+            }
             .refreshable { await model.refreshHomeData() }
+            .sheet(isPresented: $composing) {
+                ComposeSheet(title: "자료 저장", titleLabel: "경로 (docs/…)", bodyLabel: "내용", initialTitle: "docs/notes.md") { path, body in
+                    Task { await model.saveDoc(path: path, content: body) }
+                }
+            }
         }
     }
 }
 
 private struct TalkTab: View {
     @ObservedObject var model: AppModel
+    @State private var draft = ""
+    @State private var editing: ThreadMessage?
 
     private var discordReady: Bool {
         let server = Bundle.main.object(forInfoDictionaryKey: "DiscordServerID") as? String ?? ""
@@ -458,13 +692,16 @@ private struct TalkTab: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                if let err = model.writeError {
+                    Text(err).font(.footnote).foregroundStyle(.red).padding(8)
+                }
                 Group {
                     if model.isLoading && model.threadMessages.isEmpty && !model.threadsFailed {
                         ProgressView()
                     } else if model.threadsFailed && model.threadMessages.isEmpty {
                         FailedHint { await model.refreshHomeData() }
                     } else if model.threadMessages.isEmpty {
-                        EmptyHint(title: "스레드 톡이 없습니다", message: "공지와 할 일에 남긴 이야기가 여기에 모입니다.")
+                        EmptyHint(title: "스레드 톡이 없습니다", message: "아래에 메시지를 남겨 보세요.")
                     } else {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
@@ -475,6 +712,14 @@ private struct TalkTab: View {
                                             .padding(12)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                                        HStack {
+                                            Button("좋아요") { Task { await model.reactTalk(message) } }
+                                            if canMutate(role: model.session?.teamRole ?? .none, authorLogin: message.author, currentLogin: model.currentLogin) {
+                                                Button("수정") { editing = message }
+                                                Button("삭제", role: .destructive) { Task { await model.deleteTalk(message) } }
+                                            }
+                                        }
+                                        .font(.caption)
                                     }
                                 }
                             }
@@ -483,22 +728,108 @@ private struct TalkTab: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if discordReady {
-                    VStack(spacing: 6) {
-                        Button("바로 대화") { model.openDiscord() }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.crewInk)
-                            .controlSize(.large)
-                        Text("음성과 잡담은 Discord에서 이어집니다.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                HStack {
+                    TextField("메시지", text: $draft)
+                        .textFieldStyle(.roundedBorder)
+                    Button("보내기") {
+                        let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !body.isEmpty else { return }
+                        draft = ""
+                        Task { await model.postTalk(body) }
                     }
-                    .padding(16)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.crewInk)
+                }
+                .padding(12)
+                if discordReady {
+                    Button("바로 대화") { model.openDiscord() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.crewInk)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 12)
                 }
             }
             .navigationTitle("소통")
             .toolbar { RefreshButton(model: model) }
             .refreshable { await model.refreshHomeData() }
+            .sheet(item: $editing) { message in
+                ComposeSheet(
+                    title: "메시지 수정",
+                    titleLabel: "작성자",
+                    bodyLabel: "본문",
+                    initialTitle: message.author,
+                    initialBody: message.body,
+                    titleEnabled: false,
+                    onSave: { _, body in Task { await model.updateTalk(message, body: body) } }
+                )
+            }
+        }
+    }
+}
+
+private struct ComposeSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    var titleLabel = "제목"
+    var bodyLabel = "본문"
+    var initialTitle = ""
+    var initialBody = ""
+    var titleEnabled = true
+    var showDelete = false
+    var onSave: (String, String) -> Void
+    var onDelete: (() -> Void)?
+
+    @State private var fieldTitle = ""
+    @State private var fieldBody = ""
+
+    init(
+        title: String,
+        titleLabel: String = "제목",
+        bodyLabel: String = "본문",
+        initialTitle: String = "",
+        initialBody: String = "",
+        titleEnabled: Bool = true,
+        showDelete: Bool = false,
+        onSave: @escaping (String, String) -> Void,
+        onDelete: (() -> Void)? = nil
+    ) {
+        self.title = title
+        self.titleLabel = titleLabel
+        self.bodyLabel = bodyLabel
+        self.initialTitle = initialTitle
+        self.initialBody = initialBody
+        self.titleEnabled = titleEnabled
+        self.showDelete = showDelete
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _fieldTitle = State(initialValue: initialTitle)
+        _fieldBody = State(initialValue: initialBody)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField(titleLabel, text: $fieldTitle).disabled(!titleEnabled)
+                TextField(bodyLabel, text: $fieldBody, axis: .vertical).lineLimit(4...12)
+            }
+            .navigationTitle(title)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("닫기") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("저장") {
+                        onSave(fieldTitle, fieldBody)
+                        dismiss()
+                    }
+                }
+                if showDelete, let onDelete {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("삭제", role: .destructive) {
+                            onDelete()
+                            dismiss()
+                        }
+                    }
+                }
+            }
         }
     }
 }

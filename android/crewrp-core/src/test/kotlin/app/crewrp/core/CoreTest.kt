@@ -340,7 +340,7 @@ class Phase2Test {
                 assertTrue(url.endsWith("/repos/crew/box/contents/docs/README.md"))
                 HttpResult(200, """{"path":"docs/README.md","content":"$encoded","encoding":"base64"}""")
             }
-            val doc = DocsClient(ETagRESTClient(transport, cache))
+            val doc = DocsClient(transport, cache)
                 .fetchMarkdown("crew", "box", "docs/README.md", "t")
             assertTrue(doc.content.contains("자료실"))
         }
@@ -434,5 +434,103 @@ class ShellPresentationTest {
         }).listIssueComments("crew", "box", 1, "tok")
         assertEquals("ada", comments.single().author)
         assertEquals("확인했습니다", comments.single().body)
+    }
+
+    @Test
+    fun canMutateAllowsAdminOrAuthor() {
+        assertEquals(true, canMutate(TeamRole.ADMIN, "other", "me"))
+        assertEquals(true, canMutate(TeamRole.MEMBER, "me", "me"))
+        assertEquals(false, canMutate(TeamRole.MEMBER, "other", "me"))
+    }
+
+    @Test
+    fun createUpdateDeleteNotice() {
+        var step = 0
+        val client = DiscussionsClient(HttpTransport { _, _, _, body ->
+            when (step++) {
+                0 -> HttpResult(
+                    200,
+                    """{"data":{"repository":{"id":"R1","discussionCategories":{"nodes":[
+                      {"id":"C1","name":"공지"},{"id":"C2","name":"일반"}
+                    ]}}}}""",
+                )
+                1 -> {
+                    assertTrue(body!!.contains("createDiscussion"))
+                    HttpResult(200, """{"data":{"createDiscussion":{"discussion":{"id":"D1","title":"안녕","body":"본문","author":{"login":"ada"}}}}}""")
+                }
+                2 -> HttpResult(200, """{"data":{"updateDiscussion":{"discussion":{"id":"D1","title":"수정","body":"본문2","author":{"login":"ada"}}}}}""")
+                else -> HttpResult(200, """{"data":{"deleteDiscussion":{"discussion":{"id":"D1"}}}}""")
+            }
+        })
+        val setup = client.resolveSetup("crew", "box", "t")
+        assertEquals("R1", setup.repositoryId)
+        assertEquals("C1", setup.categoryId)
+        val created = client.createNotice(setup.repositoryId, setup.categoryId, "안녕", "본문", "t")
+        assertEquals("D1", created.id)
+        assertEquals("수정", client.updateNotice("D1", "수정", "본문2", "t").title)
+        client.deleteNotice("D1", "t")
+    }
+
+    @Test
+    fun threadCommentCrudAndDocsSave() {
+        val talk = ThreadTalkClient(HttpTransport { method, url, _, body ->
+            when {
+                method == "POST" && url.endsWith("/comments") ->
+                    HttpResult(201, """{"id":9,"body":"hi","user":{"login":"ada"}}""")
+                method == "PATCH" ->
+                    HttpResult(200, """{"id":9,"body":"edit","user":{"login":"ada"}}""")
+                method == "DELETE" -> HttpResult(204, "")
+                method == "POST" && url.contains("/reactions") -> HttpResult(200, "{}")
+                else -> error("$method $url $body")
+            }
+        })
+        assertEquals("hi", talk.postComment("a", "b", 1, "hi", "t").body)
+        assertEquals("edit", talk.updateComment("a", "b", "9", "edit", "t").body)
+        talk.deleteComment("a", "b", "9", "t")
+        talk.addReaction("a", "b", "9", "+1", "t")
+
+        JdbcCacheStore(":memory:").use { cache ->
+            val docs = DocsClient(
+                HttpTransport { method, url, _, body ->
+                    when {
+                        method == "GET" && url.contains("/contents/docs") && !url.contains("README") ->
+                            HttpResult(200, """[{"path":"docs/README.md","name":"README.md","type":"file","sha":"s1"}]""")
+                        method == "PUT" -> {
+                            assertTrue(body!!.contains("자료 저장"))
+                            HttpResult(200, """{"content":{"path":"docs/a.md","sha":"s2"}}""")
+                        }
+                        method == "DELETE" -> HttpResult(200, "{}")
+                        else -> error("$method $url")
+                    }
+                },
+                cache,
+            )
+            assertEquals("docs/README.md", docs.listDocs("c", "r", "t").single().path)
+            assertEquals("s2", docs.saveMarkdown("c", "r", "docs/a.md", "# hi", "t", null).sha)
+            docs.deleteDoc("c", "r", "docs/a.md", "s2", "t")
+        }
+    }
+
+    @Test
+    fun listTasksFallsBackToUserProject() {
+        var calls = 0
+        val client = ProjectsClient(HttpTransport { _, _, _, body ->
+            calls++
+            if (body!!.contains("organization(login")) {
+                HttpResult(200, """{"data":{"organization":null}}""")
+            } else {
+                HttpResult(
+                    200,
+                    """{"data":{"user":{"projectV2":{"items":{"nodes":[
+                      {"id":"i1","content":{"title":"개인","number":3},"fieldValues":{"nodes":[]}}
+                    ]}}}}}""",
+                )
+            }
+        })
+        val cards = client.listTasks("alice", 1, "t")
+        assertEquals(1, cards.size)
+        assertEquals("개인", cards.single().title)
+        assertEquals(3, cards.single().issueNumber)
+        assertTrue(calls >= 2)
     }
 }
