@@ -51,12 +51,16 @@ fun fetchCrewContent(session: Session, token: String, cache: CacheStore, project
     val transport = UrlHttpTransport()
     val login = runCatching { GitHubMembershipClient(transport).currentUser(token).login }.getOrNull()
     val projects = ProjectsClient(transport)
-    val tasks = runCatching { projects.sortedByDueDate(projects.listTasks(session.org, projectNumber, token)) }
-    val meta = runCatching { projects.loadFieldMeta(session.org, projectNumber, token) }
+    val number = runCatching { projects.resolveProjectNumber(session.org, projectNumber, token) }
+        .getOrDefault(projectNumber)
+    val tasks = runCatching { projects.sortedByDueDate(projects.listTasks(session.org, number, token)) }
+    val meta = runCatching { projects.loadFieldMeta(session.org, number, token) }
     val discussions = DiscussionsClient(transport)
     val notices = runCatching { discussions.listNotices(owner, repo, token) }
     val setup = runCatching { discussions.resolveSetup(owner, repo, token) }
-    val threads = runCatching { ThreadTalkClient(transport).listIssueComments(owner, repo, 1, token) }
+    val talkClient = ThreadTalkClient(transport)
+    val talkIssue = runCatching { talkClient.ensureTalkIssueNumber(owner, repo, token) }
+    val threads = talkIssue.mapCatching { n -> talkClient.listIssueComments(owner, repo, n, token) }
     val docsClient = DocsClient(transport, cache)
     val docs = runCatching { docsClient.listDocs(owner, repo, token) }
     val docPath = docs.getOrNull()?.firstOrNull { !it.isDir && it.name.equals("README.md", true) }?.path
@@ -89,6 +93,10 @@ class CrewWriter(
     private val transport = UrlHttpTransport()
     private val owner = session.repo.substringBefore('/')
     private val repo = session.repo.substringAfter('/')
+    private val projects = ProjectsClient(transport)
+
+    private fun resolvedProjectNumber(): Int =
+        projects.resolveProjectNumber(session.org, projectNumber, token)
 
     fun createNotice(title: String, body: String, setup: DiscussionSetup): Notice =
         DiscussionsClient(transport).createNotice(setup.repositoryId, setup.categoryId, title, body, token)
@@ -100,7 +108,7 @@ class CrewWriter(
         DiscussionsClient(transport).deleteNotice(id, token)
 
     fun createTask(title: String, dueOn: String?): TaskCard =
-        ProjectsClient(transport).createTask(owner, repo, title, "", projectNumber, token, dueOn)
+        projects.createTask(owner, repo, title, "", resolvedProjectNumber(), token, dueOn)
 
     fun updateTask(meta: ProjectFieldMeta, card: TaskCard, statusLabel: String, dueOn: String?) {
         val opt = meta.statusOptions.entries.firstOrNull {
@@ -129,8 +137,11 @@ class CrewWriter(
     fun openDoc(path: String): DocFile =
         DocsClient(transport, cache).fetchMarkdown(owner, repo, path, token)
 
-    fun postTalk(body: String): ThreadMessage =
-        ThreadTalkClient(transport).postComment(owner, repo, 1, body, token)
+    fun postTalk(body: String): ThreadMessage {
+        val talk = ThreadTalkClient(transport)
+        val issue = talk.ensureTalkIssueNumber(owner, repo, token)
+        return talk.postComment(owner, repo, issue, body, token)
+    }
 
     fun updateTalk(id: String, body: String): ThreadMessage =
         ThreadTalkClient(transport).updateComment(owner, repo, id, body, token)

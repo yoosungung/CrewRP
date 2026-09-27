@@ -23,6 +23,7 @@ interface CacheStore : AutoCloseable {
     fun graphQLCursor(queryName: String): GraphQLCursorRow?
     fun putSession(session: Session)
     fun session(): Session?
+    fun clearSession()
 }
 
 /** JVM / unit-test store (sqlite-jdbc). Not for Android runtime. */
@@ -142,6 +143,10 @@ class JdbcCacheStore(path: String) : CacheStore {
                 return Session(rs.getString(1), rs.getString(2), role)
             }
         }
+    }
+
+    override fun clearSession() {
+        connection.prepareStatement("DELETE FROM session WHERE id = 1").use { it.executeUpdate() }
     }
 
     override fun close() {

@@ -73,6 +73,10 @@ class AndroidCacheStore(context: Context) : CacheStore {
         }
     }
 
+    override fun clearSession() {
+        db.execSQL("DELETE FROM session WHERE id = 1")
+    }
+
     override fun close() {
         helper.close()
     }

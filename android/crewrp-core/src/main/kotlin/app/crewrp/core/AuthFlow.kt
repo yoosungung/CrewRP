@@ -51,6 +51,12 @@ class AuthFlow(
         cache.putSession(session)
         return session
     }
+
+    fun logout() {
+        tokens.clearAccessToken()
+        pendingStore.clear()
+        cache.clearSession()
+    }
 }
 
 internal object URIQuery {

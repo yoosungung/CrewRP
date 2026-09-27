@@ -17,6 +17,27 @@ fun taskLane(status: String): TaskLane {
 
 fun roleLabel(role: TeamRole): String = if (role == TeamRole.ADMIN) "운영진" else "멤버"
 
+/** 쓰기 API 실패 문구. 스코프 부족이면 재로그인을 안내한다. */
+fun writeFailureMessage(detail: String): String {
+    val lower = detail.lowercase()
+    if ("scope" in lower || "resource not accessible" in lower) {
+        return "권한이 부족합니다. 다시 로그인해 주세요."
+    }
+    if ("http 401" in lower || "github http 401" in lower) {
+        return "로그인이 만료되었습니다. 다시 로그인해 주세요."
+    }
+    if ("http 403" in lower || "github http 403" in lower) {
+        return "권한이 부족합니다. 다시 로그인해 주세요."
+    }
+    if ("http 404" in lower || "github http 404" in lower) {
+        return "대상이 없습니다. 잠시 후 다시 시도해 주세요."
+    }
+    if ("http 429" in lower || "github http 429" in lower) {
+        return "요청이 많습니다. 잠시 후 다시 시도해 주세요."
+    }
+    return "저장하지 못했습니다. 잠시 후 다시 시도해 주세요."
+}
+
 /** 운영진은 전부, 멤버는 본인 작성분만 수정·삭제. */
 fun canMutate(role: TeamRole, authorLogin: String?, currentLogin: String?): Boolean {
     if (role == TeamRole.ADMIN) return true

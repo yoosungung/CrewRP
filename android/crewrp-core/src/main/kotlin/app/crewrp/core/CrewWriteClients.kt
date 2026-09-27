@@ -52,7 +52,9 @@ internal object Graphql {
         require(result.status in 200..299) { "github http ${result.status}" }
         val root = json.parseToJsonElement(result.body).jsonObject
         val errors = root["errors"] as? JsonArray
-        if (errors != null && errors.isNotEmpty()) {
+        val data = root["data"]
+        // Org+user dual queries often return NOT_FOUND on one branch while the other has data.
+        if (errors != null && errors.isNotEmpty() && (data == null || data is JsonNull)) {
             error("graphql: ${errors.first()}")
         }
         return root

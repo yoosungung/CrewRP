@@ -40,7 +40,7 @@ public enum GitHubOAuth {
         redirectURI: String,
         state: String,
         codeChallenge: String,
-        scope: String = "read:org repo"
+        scope: String = "read:org repo project"
     ) -> URL {
         var components = URLComponents(string: "https://github.com/login/oauth/authorize")!
         components.queryItems = [

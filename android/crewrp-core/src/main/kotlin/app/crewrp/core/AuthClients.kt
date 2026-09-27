@@ -15,7 +15,13 @@ data class HttpResult(val status: Int, val body: String)
 class UrlHttpTransport : HttpTransport {
     override fun exchange(method: String, url: String, headers: Map<String, String>, body: String?): HttpResult {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
+            // JVM HttpURLConnection rejects PATCH; GitHub honors X-HTTP-Method-Override.
+            if (method.equals("PATCH", ignoreCase = true)) {
+                requestMethod = "POST"
+                setRequestProperty("X-HTTP-Method-Override", "PATCH")
+            } else {
+                requestMethod = method
+            }
             doInput = true
             headers.forEach { (k, v) -> setRequestProperty(k, v) }
             if (body != null) {

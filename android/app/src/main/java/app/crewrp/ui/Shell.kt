@@ -140,14 +140,26 @@ fun LoginScreen(error: String?, onLogin: () -> Unit) {
 }
 
 @Composable
-fun CrewStartScreen(repos: List<CrewRepo>, error: String?, onSelect: (CrewRepo) -> Unit) {
+fun CrewStartScreen(
+    repos: List<CrewRepo>,
+    error: String?,
+    onSelect: (CrewRepo) -> Unit,
+    onLogout: () -> Unit,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().safeDrawingPadding(),
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Text("크루 시작", style = MaterialTheme.typography.headlineMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("크루 시작", style = MaterialTheme.typography.headlineMedium)
+                TextButton(onClick = onLogout) { Text("로그아웃") }
+            }
             Text(
                 "운영 권한이 있는 보관소를 고르세요.",
                 modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
@@ -180,6 +192,7 @@ fun CrewShell(
     actions: CrewActions,
     onRefresh: () -> Unit,
     onDiscord: () -> Unit,
+    onLogout: () -> Unit,
 ) {
     var tab by remember { mutableIntStateOf(0) }
     var compose by remember { mutableStateOf<ComposeKind?>(null) }
@@ -200,6 +213,7 @@ fun CrewShell(
                     }
                 },
                 actions = {
+                    TextButton(onClick = onLogout) { Text("로그아웃") }
                     IconButton(onClick = onRefresh) { Icon(Icons.Filled.Refresh, contentDescription = "새로고침") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),

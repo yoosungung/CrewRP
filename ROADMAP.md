@@ -10,7 +10,7 @@
 - [x] 토큰 보관(Keychain / EncryptedSharedPreferences)
 - [x] auth-bridge 코드 교환 클라이언트
 - [x] Organization 목록·`admins`/`members` Team 식별 클라이언트
-- [x] 시스템 브라우저 로그인 UI(앱 셸: iOS `ASWebAuthenticationSession`, Android Custom Tabs)
+- [x] 시스템 브라우저 로그인 UI(앱 셸: iOS/Android 외부 브라우저 + `crewrp://` 콜백)
 - 완료 기준: GitHub OAuth App·Worker URL을 넣고 로그인·조직 선택 수동 확인
 
 ## Phase 2 — 할 일, 자료, 공지, 서식
@@ -30,7 +30,8 @@
 - [x] 앱에서 Discord 딥링크·기기 등록 API 호출 훅(실제 FCM/APNs 토큰은 배포 설정 후)
 - [x] 스레드 톡 앱 CRUD(댓글 전송·수정·삭제·반응) 화면 바인딩
 - 지출 한도 $0 유지(설계 반영)
-- 완료 기준: OAuth·Worker·Discord·FCM 실키 투입 후 수동 E2E
+- [x] 코어 CRUD E2E 하네스(`scripts/e2e-crud.sh`, `CREWRP_E2E_TOKEN`+`CREWRP_E2E_REPO`; 할 일은 `project` 토큰 또는 에뮬 앱 세션 `DeviceCrudSmokeTest`)
+- 완료 기준: OAuth·Worker·Discord·FCM 실키 투입 후 UI 수동 E2E + `./scripts/e2e-crud.sh` 통과(할 일: host `project` 또는 로그인된 에뮬)
 
 ## 미결정
 

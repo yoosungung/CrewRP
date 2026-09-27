@@ -36,6 +36,8 @@ struct PKCETests {
         #expect(map["code_challenge"] == "chal")
         #expect(map["code_challenge_method"] == "S256")
         #expect(map["response_type"] == "code")
+        // Projects v2 mutations require the dedicated `project` scope (repo alone is not enough).
+        #expect(map["scope"] == "read:org repo project")
     }
 }
 
@@ -109,6 +111,20 @@ struct TokenStoreTests {
         #expect(try store.loadAccessToken() == "gho_x")
         try store.clearAccessToken()
         #expect(try store.loadAccessToken() == nil)
+    }
+}
+
+@Suite("GitHubMembershipClient")
+struct GitHubMembershipClientURLTests {
+    @Test("apiURL encodes affiliation query")
+    func apiURLBuildsReposQuery() {
+        let base = URL(string: "https://api.github.com")!
+        let url = GitHubMembershipClient.apiURL(
+            base: base,
+            path: "user/repos?per_page=100&affiliation=owner,organization_member"
+        )
+        #expect(url?.absoluteString.contains("user/repos") == true)
+        #expect(url?.absoluteString.contains("affiliation=") == true)
     }
 }
 
@@ -251,6 +267,46 @@ struct AuthFlowTests {
         #expect(session.repo == "alice/study")
         #expect(session.teamRole == .admin)
     }
+
+    @Test("logout clears token session and pending oauth")
+    func logoutClearsLocalAuth() async throws {
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            if request.url!.path.hasSuffix("/oauth/token") {
+                return (Data(#"{"access_token":"gho_ok"}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            if request.url!.absoluteString.contains("/user/repos") {
+                let data = Data(#"""
+                [{"name":"box","full_name":"crew/box","private":true,
+                  "permissions":{"admin":true},"owner":{"login":"crew"}}]
+                """#.utf8)
+                return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            if request.url!.path.hasSuffix("/user/teams") {
+                return (Data("[]".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            throw GitHubAPIError.invalidResponse
+        }
+        let cache = try CacheStore(path: ":memory:")
+        let tokens = InMemoryTokenStore()
+        let pending = InMemoryPendingLoginStore()
+        let flow = AuthFlow(
+            config: AuthConfig(clientID: "cid", redirectURI: "crewrp://oauth/callback", authBridgeBaseURL: URL(string: "https://auth.example")!),
+            bridge: AuthBridgeClient(baseURL: URL(string: "https://auth.example")!, transport: transport),
+            membership: GitHubMembershipClient(transport: transport),
+            tokens: tokens,
+            cache: cache,
+            pendingStore: pending
+        )
+        let challenge = flow.beginLogin()
+        _ = try await flow.completeLogin(callbackURL: URL(string: "crewrp://oauth/callback?code=x&state=\(challenge.state)")!)
+        _ = try await flow.registerCrew(CrewRepo(owner: "crew", name: "box", fullName: "crew/box", isPrivate: true))
+        _ = flow.beginLogin()
+        try flow.logout()
+        #expect(try tokens.loadAccessToken() == nil)
+        #expect(try cache.session() == nil)
+        #expect(try pending.load() == nil)
+    }
 }
 
 @Suite("IssueFormParser")
@@ -292,6 +348,27 @@ struct ETagRESTClientTests {
         let result = try await client.get(url: URL(string: "https://api.github.com/repos/o/r/contents/docs/a.md")!, token: "t")
         #expect(result.fromCache)
         #expect(String(data: result.body, encoding: .utf8) == #"{"ok":1}"#)
+    }
+}
+
+@Suite("CacheStore concurrency")
+struct CacheStoreConcurrencyTests {
+    @Test("survives concurrent writers")
+    func concurrentWriters() async throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "crewrp-cache-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appending(path: "crewrp.sqlite").path
+        let store = try CacheStore(path: path)
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<40 {
+                group.addTask {
+                    try? store.putCacheEntry(url: "https://example.com/\(i)", body: "{\"i\":\(i)}", etag: "\"e\(i)\"")
+                    try? store.putSession(Session(org: "o", repo: "o/r", teamRole: .admin))
+                    _ = try? store.cacheEntry(url: "https://example.com/\(i)")
+                }
+            }
+        }
+        #expect(try store.session()?.repo == "o/r")
     }
 }
 
@@ -396,5 +473,43 @@ struct ShellPresentationTests {
         #expect(canMutate(role: .admin, authorLogin: "other", currentLogin: "me"))
         #expect(canMutate(role: .member, authorLogin: "me", currentLogin: "me"))
         #expect(!canMutate(role: .member, authorLogin: "other", currentLogin: "me"))
+    }
+
+    @Test("writeFailureMessage guides re-login on missing scopes")
+    func writeFailureGuidesRelogin() {
+        #expect(writeFailureMessage("requires one of the following scopes: ['project']").contains("다시 로그인"))
+        #expect(writeFailureMessage("httpStatus(401)").contains("만료"))
+        #expect(writeFailureMessage("timeout") == "저장하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+    }
+
+    @Test("loginFailureMessage ignores canceled session")
+    func loginFailureIgnoresCancel() {
+        #expect(loginFailureMessage(domain: "com.apple.AuthenticationServices.WebAuthenticationSession", code: 1) == nil)
+        #expect(loginFailureMessage(domain: "com.apple.AuthenticationServices.WebAuthenticationSession", code: 2) != nil)
+    }
+
+    @Test("authFailureMessage maps pending and http errors")
+    func authFailureMaps() {
+        #expect(authFailureMessage(describing: "missingPendingLogin").contains("만료"))
+        #expect(authFailureMessage(describing: "httpStatus(401)").contains("권한"))
+        // OSStatus -34018 must not be mistaken for HTTP 401.
+        #expect(!authFailureMessage(describing: "loadFailed(-34018)").contains("권한"))
+        #expect(authFailureMessage(describing: "loadFailed(-34018)").contains("저장하지"))
+    }
+}
+
+@Suite("PendingLoginStore")
+struct PendingLoginStoreTests {
+    @Test("user defaults pending round-trips")
+    func userDefaultsPending() throws {
+        let defaults = UserDefaults(suiteName: "crewrp.test.pending")!
+        defaults.removePersistentDomain(forName: "crewrp.test.pending")
+        let store = UserDefaultsPendingLoginStore(defaults: defaults)
+        try store.save(state: "st", codeVerifier: "ver")
+        let loaded = try store.load()
+        #expect(loaded?.state == "st")
+        #expect(loaded?.codeVerifier == "ver")
+        try store.clear()
+        #expect(try store.load() == nil)
     }
 }

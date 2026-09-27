@@ -10,6 +10,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
@@ -38,7 +39,7 @@ class ETagRESTClient(
             return CachedHTTPResponse(304, cached.body, cached.etag, true)
         }
         require(result.status in 200..299) { "github http ${result.status}" }
-        cache.putCacheEntry(url, result.body, null)
+        runCatching { cache.putCacheEntry(url, result.body, null) }
         return CachedHTTPResponse(result.status, result.body, null, false)
     }
 }
@@ -131,6 +132,74 @@ class ProjectsClient(
     fun sortedByDueDate(cards: List<TaskCard>): List<TaskCard> =
         cards.sortedBy { it.dueOn ?: "9999" }
 
+    /** Lowest Projects v2 number for a user/org login, or null if none. */
+    fun firstProjectNumber(owner: String, token: String): Int? {
+        val query = """
+            query(${'$'}login:String!){
+              organization(login:${'$'}login){ projectsV2(first:20){ nodes{ number } } }
+              user(login:${'$'}login){ projectsV2(first:20){ nodes{ number } } }
+            }
+        """.trimIndent()
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            query,
+            buildJsonObject { put("login", owner) },
+        )
+        val data = root["data"]?.jsonObject ?: return null
+        fun numbers(key: String): List<Int> {
+            val nodes = data[key]?.takeUnless { it is JsonNull }?.jsonObject
+                ?.get("projectsV2")?.takeUnless { it is JsonNull }?.jsonObject
+                ?.get("nodes")?.jsonArray ?: return emptyList()
+            return nodes.mapNotNull { (it as? JsonObject)?.get("number")?.jsonPrimitive?.intOrNull }
+        }
+        return (numbers("organization") + numbers("user")).minOrNull()
+    }
+
+    /**
+     * Prefer [preferred] when that Projects v2 exists; otherwise the lowest existing
+     * number, or create a user project named "CrewRP".
+     */
+    fun resolveProjectNumber(owner: String, preferred: Int, token: String): Int {
+        if (loadFieldMeta(owner, preferred, token) != null) return preferred
+        return firstProjectNumber(owner, token) ?: createUserProject(owner, "CrewRP", token)
+    }
+
+    /** Creates a user-owned Project v2 and returns its number. */
+    fun createUserProject(ownerLogin: String, title: String, token: String): Int {
+        val idRoot = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """query(${'$'}login:String!){ user(login:${'$'}login){ id } }""",
+            buildJsonObject { put("login", ownerLogin) },
+        )
+        val ownerId = idRoot["data"]?.jsonObject?.get("user")?.jsonObject?.get("id").textOrNull()
+            ?: error("missing user id")
+        val created = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            mutation(${'$'}ownerId:ID!,${'$'}title:String!){
+              createProjectV2(input:{ownerId:${'$'}ownerId,title:${'$'}title}){
+                projectV2 { number }
+              }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                put("ownerId", ownerId)
+                put("title", title)
+            },
+        )
+        return created["data"]?.jsonObject
+            ?.get("createProjectV2")?.jsonObject
+            ?.get("projectV2")?.jsonObject
+            ?.get("number")?.jsonPrimitive?.intOrNull
+            ?: error("missing project number")
+    }
+
     fun listTasks(owner: String, projectNumber: Int, token: String): List<TaskCard> {
         val orgCards = queryProjectItems("organization", owner, projectNumber, token)
         if (orgCards != null) return orgCards
@@ -196,7 +265,7 @@ class ProjectsClient(
                         options[name] = id
                     }
                 }
-                "Due" -> dueFieldId = node["id"].textOrNull()
+                "Due", "Date" -> dueFieldId = node["id"].textOrNull()
             }
         }
         return ProjectFieldMeta(projectId, statusFieldId, dueFieldId, options)
@@ -221,7 +290,20 @@ class ProjectsClient(
         val issue = json.parseToJsonElement(created.body).jsonObject
         val number = issue["number"]?.jsonPrimitive?.content?.toIntOrNull() ?: error("missing issue number")
         val nodeId = issue["node_id"].textOrNull() ?: error("missing node_id")
-        val meta = loadFieldMeta(owner, projectNumber, token) ?: error("missing project")
+        val meta = try {
+            loadFieldMeta(owner, projectNumber, token) ?: error("missing project")
+        } catch (e: Throwable) {
+            // Avoid orphan issues when project scope/meta is missing.
+            runCatching {
+                transport.rest(
+                    "PATCH",
+                    "$apiBase/repos/$owner/$repo/issues/$number",
+                    token,
+                    """{"state":"closed"}""",
+                )
+            }
+            throw e
+        }
         val added = Graphql.post(
             transport,
             apiBase,
@@ -394,7 +476,7 @@ class ProjectsClient(
                 if (fieldEl !is JsonObject) return@forEach
                 when (fieldEl["field"]?.takeUnless { it is JsonNull }?.jsonObject?.get("name").textOrNull()) {
                     "Status" -> fieldEl["name"].textOrNull()?.let { status = it }
-                    "Due" -> due = fieldEl["date"].textOrNull()
+                    "Due", "Date" -> due = fieldEl["date"].textOrNull()
                 }
             }
             TaskCard(id, title, status, due, issueNumber, contentId)
@@ -660,6 +742,53 @@ class ThreadTalkClient(
     private val apiBase: String = "https://api.github.com",
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+
+    companion object {
+        const val TALK_ISSUE_TITLE = "스레드 톡"
+    }
+
+    /** Finds the dedicated talk issue (title `스레드 톡`), else issue `#1`, else creates one. */
+    fun ensureTalkIssueNumber(owner: String, repo: String, token: String): Int {
+        findOpenIssue(owner, repo, TALK_ISSUE_TITLE, token)?.let { return it }
+        if (issueExists(owner, repo, 1, token)) return 1
+        return createIssue(owner, repo, TALK_ISSUE_TITLE, "크루 스레드 톡", token)
+    }
+
+    private fun findOpenIssue(owner: String, repo: String, title: String, token: String): Int? {
+        val result = transport.rest(
+            "GET",
+            "$apiBase/repos/$owner/$repo/issues?state=open&per_page=50",
+            token,
+        )
+        require(result.status in 200..299) { "github http ${result.status}" }
+        if (result.body.isBlank()) return null
+        return json.parseToJsonElement(result.body).jsonArray.firstNotNullOfOrNull { element ->
+            val o = element as? JsonObject ?: return@firstNotNullOfOrNull null
+            if (o["title"].textOrNull() == title) o["number"]?.jsonPrimitive?.intOrNull else null
+        }
+    }
+
+    private fun issueExists(owner: String, repo: String, number: Int, token: String): Boolean {
+        val result = transport.rest("GET", "$apiBase/repos/$owner/$repo/issues/$number", token)
+        if (result.status == 404) return false
+        require(result.status in 200..299) { "github http ${result.status}" }
+        return true
+    }
+
+    private fun createIssue(owner: String, repo: String, title: String, body: String, token: String): Int {
+        val result = transport.rest(
+            "POST",
+            "$apiBase/repos/$owner/$repo/issues",
+            token,
+            buildJsonObject {
+                put("title", title)
+                put("body", body)
+            }.toString(),
+        )
+        require(result.status in 200..299) { "github http ${result.status}" }
+        return json.parseToJsonElement(result.body).jsonObject["number"]?.jsonPrimitive?.intOrNull
+            ?: error("missing issue number")
+    }
 
     fun listIssueComments(owner: String, repo: String, issueNumber: Int, token: String): List<ThreadMessage> {
         val result = transport.rest(

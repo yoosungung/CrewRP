@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
-import AuthenticationServices
 import CrewRPCore
+import os
 
 @main
 struct CrewRPApp: App {
@@ -34,13 +34,14 @@ final class AppModel: ObservableObject {
     @Published var currentLogin: String?
     @Published var projectMeta: ProjectFieldMeta?
     @Published var discussionSetup: DiscussionSetup?
+    @Published var talkIssueNumber: Int = 1
     private var didRegisterPush = false
 
     private let flow: AuthFlow
     private let cache: CacheStore
     private let tokens: KeychainTokenStore
     private let transport = URLSessionTransport()
-    private var webSession: ASWebAuthenticationSession?
+    private let log = Logger(subsystem: "app.crewrp", category: "auth")
 
     private var projectNumber: Int {
         Int(Bundle.main.object(forInfoDictionaryKey: "ProjectNumber") as? String ?? "1") ?? 1
@@ -69,38 +70,33 @@ final class AppModel: ObservableObject {
             bridge: AuthBridgeClient(baseURL: config.authBridgeBaseURL, transport: transport),
             membership: GitHubMembershipClient(transport: transport),
             tokens: tokens,
-            cache: cache
+            cache: cache,
+            pendingStore: UserDefaultsPendingLoginStore()
         )
         session = try? cache.session()
     }
 
     func login() {
+        errorMessage = nil
         let challenge = flow.beginLogin()
-        let session = ASWebAuthenticationSession(
-            url: challenge.authorizeURL,
-            callbackURLScheme: "crewrp"
-        ) { [weak self] callback, error in
-            Task { @MainActor in
-                guard let self else { return }
-                if error != nil {
-                    self.errorMessage = "로그인에 실패했습니다. 잠시 후 다시 시도해 주세요."
-                    return
-                }
-                guard let callback else { return }
-                do {
-                    self.registrableRepos = try await self.flow.completeLogin(callbackURL: callback)
-                    if self.registrableRepos.isEmpty {
-                        self.errorMessage = "운영 권한이 있는 보관소가 없습니다."
-                    }
-                } catch {
-                    self.errorMessage = "로그인에 실패했습니다. 잠시 후 다시 시도해 주세요."
-                }
+        // External Safari (same as Android): ASWebAuthenticationSession was dropping the
+        // post-token repo list call after OAuth return on recent simulators.
+        UIApplication.shared.open(challenge.authorizeURL)
+    }
+
+    func handleOAuthCallback(_ url: URL) {
+        guard url.scheme == "crewrp" else { return }
+        Task {
+            do {
+                registrableRepos = try await flow.completeLogin(callbackURL: url)
+                errorMessage = registrableRepos.isEmpty
+                    ? "운영 권한이 있는 보관소가 없습니다."
+                    : nil
+            } catch {
+                log.error("completeLogin failed: \(String(describing: error), privacy: .public)")
+                errorMessage = authFailureMessage(describing: String(describing: error))
             }
         }
-        session.prefersEphemeralWebBrowserSession = true
-        session.presentationContextProvider = AuthPresenter.shared
-        webSession = session
-        session.start()
     }
 
     func register(_ repo: CrewRepo) {
@@ -115,6 +111,25 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func logout() {
+        try? flow.logout()
+        session = nil
+        registrableRepos = []
+        errorMessage = nil
+        writeError = nil
+        tasks = []
+        notices = []
+        docs = []
+        threadMessages = []
+        currentLogin = nil
+        projectMeta = nil
+        discussionSetup = nil
+        docPreview = ""
+        docSha = nil
+        selectedTab = 0
+        didRegisterPush = false
+    }
+
     func refreshHomeData() async {
         guard let session, let token = try? tokens.loadAccessToken(), let parts = repoParts else { return }
         let owner = parts.owner
@@ -126,10 +141,13 @@ final class AppModel: ObservableObject {
 
         do {
             let projects = ProjectsClient(transport: transport)
+            let number = (try? await projects.resolveProjectNumber(
+                owner: session.org, preferred: projectNumber, token: token
+            )) ?? projectNumber
             tasks = try await projects.sortedByDueDate(
-                projects.listTasks(org: session.org, projectNumber: projectNumber, token: token)
+                projects.listTasks(org: session.org, projectNumber: number, token: token)
             )
-            projectMeta = try? await projects.loadFieldMeta(owner: session.org, projectNumber: projectNumber, token: token)
+            projectMeta = try? await projects.loadFieldMeta(owner: session.org, projectNumber: number, token: token)
             tasksFailed = false
         } catch {
             tasksFailed = true
@@ -147,19 +165,34 @@ final class AppModel: ObservableObject {
         do {
             let docsClient = DocsClient(transport: transport, cache: cache)
             docs = (try? await docsClient.listDocs(owner: owner, repo: repo, token: token)) ?? []
-            let path = docs.first(where: { !$0.isDir && $0.name.lowercased() == "readme.md" })?.path ?? docPath
-            let file = try await docsClient.fetchMarkdown(owner: owner, repo: repo, path: path, token: token)
-            docPath = file.path
-            docPreview = file.content
-            docSha = file.sha
-            docFailed = false
-        } catch {
-            docFailed = true
+            let path = docs.first(where: { !$0.isDir && $0.name.lowercased() == "readme.md" })?.path
+                ?? docs.first(where: { !$0.isDir })?.path
+                ?? docPath
+            do {
+                let file = try await docsClient.fetchMarkdown(owner: owner, repo: repo, path: path, token: token)
+                docPath = file.path
+                docPreview = file.content
+                docSha = file.sha
+                docFailed = false
+            } catch {
+                // Missing docs folder/file → empty 자료실; other errors → retry hint.
+                if case GitHubAPIError.httpStatus(404) = error {
+                    docPreview = ""
+                    docSha = nil
+                    docFailed = false
+                } else {
+                    log.error("docs fetch failed: \(String(describing: error), privacy: .public)")
+                    docFailed = true
+                }
+            }
         }
 
         do {
-            threadMessages = try await ThreadTalkClient(transport: transport)
-                .listIssueComments(owner: owner, repo: repo, issueNumber: 1, token: token)
+            let talk = ThreadTalkClient(transport: transport)
+            talkIssueNumber = try await talk.ensureTalkIssueNumber(owner: owner, repo: repo, token: token)
+            threadMessages = try await talk.listIssueComments(
+                owner: owner, repo: repo, issueNumber: talkIssueNumber, token: token
+            )
             threadsFailed = false
         } catch {
             threadsFailed = true
@@ -172,13 +205,17 @@ final class AppModel: ObservableObject {
     }
 
     private func withToken(_ work: (String, String, String) async throws -> Void) async {
-        guard let token = try? tokens.loadAccessToken(), let parts = repoParts else { return }
+        guard let token = try? tokens.loadAccessToken(), let parts = repoParts else {
+            writeError = "로그인이 만료되었습니다. 다시 로그인해 주세요."
+            return
+        }
         do {
             try await work(token, parts.owner, parts.repo)
             writeError = nil
             await refreshHomeData()
         } catch {
-            writeError = "저장하지 못했습니다. 잠시 후 다시 시도해 주세요."
+            log.error("write failed: \(String(describing: error), privacy: .public)")
+            writeError = writeFailureMessage(String(describing: error))
         }
     }
 
@@ -204,8 +241,12 @@ final class AppModel: ObservableObject {
 
     func createTask(title: String, dueOn: String?) async {
         await withToken { token, owner, repo in
-            _ = try await ProjectsClient(transport: transport).createTask(
-                owner: owner, repo: repo, title: title, body: "", projectNumber: projectNumber, token: token, dueOn: dueOn
+            let projects = ProjectsClient(transport: transport)
+            let number = try await projects.resolveProjectNumber(
+                owner: session?.org ?? owner, preferred: projectNumber, token: token
+            )
+            _ = try await projects.createTask(
+                owner: owner, repo: repo, title: title, body: "", projectNumber: number, token: token, dueOn: dueOn
             )
         }
     }
@@ -256,7 +297,7 @@ final class AppModel: ObservableObject {
             docSha = file.sha
             docFailed = false
         } catch {
-            writeError = "저장하지 못했습니다. 잠시 후 다시 시도해 주세요."
+            writeError = writeFailureMessage(String(describing: error))
         }
     }
 
@@ -270,8 +311,10 @@ final class AppModel: ObservableObject {
 
     func postTalk(_ body: String) async {
         await withToken { token, owner, repo in
-            _ = try await ThreadTalkClient(transport: transport)
-                .postComment(owner: owner, repo: repo, issueNumber: 1, body: body, token: token)
+            let talk = ThreadTalkClient(transport: transport)
+            let issue = try await talk.ensureTalkIssueNumber(owner: owner, repo: repo, token: token)
+            talkIssueNumber = issue
+            _ = try await talk.postComment(owner: owner, repo: repo, issueNumber: issue, body: body, token: token)
         }
     }
 
@@ -317,16 +360,6 @@ final class AppModel: ObservableObject {
     }
 }
 
-final class AuthPresenter: NSObject, ASWebAuthenticationPresentationContextProviding {
-    static let shared = AuthPresenter()
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first { $0.isKeyWindow } ?? ASPresentationAnchor()
-    }
-}
-
 private extension Color {
     static let crewInk = Color(red: 15.0 / 255, green: 92.0 / 255, blue: 92.0 / 255)
 }
@@ -368,6 +401,11 @@ struct RootView: View {
                         }
                     }
                     .navigationTitle("크루 시작")
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("로그아웃") { model.logout() }
+                        }
+                    }
                     .safeAreaInset(edge: .top) {
                         Text("운영 권한이 있는 보관소를 고르세요.")
                             .font(.subheadline)
@@ -381,6 +419,7 @@ struct RootView: View {
                 LoginView(error: model.errorMessage) { model.login() }
             }
         }
+        .onOpenURL { model.handleOAuthCallback($0) }
     }
 }
 
@@ -471,6 +510,9 @@ private struct HomeTab: View {
             }
             .navigationTitle(model.session.map { crewDisplayName($0.repo) } ?? "홈")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("로그아웃") { model.logout() }
+                }
                 RefreshButton(model: model)
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { composing = true } label: { Image(systemName: "plus") }

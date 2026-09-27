@@ -7,12 +7,17 @@ public protocol HTTPTransport: Sendable {
 public struct URLSessionTransport: HTTPTransport {
     private let session: URLSession
 
-    public init(session: URLSession = .shared) {
+    /// Ephemeral session avoids caching OAuth token responses (shared URLCache can break re-login).
+    public init(session: URLSession = URLSession(configuration: .ephemeral)) {
         self.session = session
     }
 
     public func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.data(for: request)
+        var req = request
+        if req.cachePolicy == .useProtocolCachePolicy {
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+        }
+        let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else {
             throw AuthBridgeError.invalidResponse
         }

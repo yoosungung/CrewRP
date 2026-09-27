@@ -28,6 +28,7 @@ import app.crewrp.core.Session
 import app.crewrp.core.TokenStore
 import app.crewrp.core.UrlHttpTransport
 import app.crewrp.core.discordConfigured
+import app.crewrp.core.writeFailureMessage
 import app.crewrp.ui.CrewActions
 import app.crewrp.ui.CrewRPTheme
 import app.crewrp.ui.CrewShell
@@ -180,7 +181,7 @@ class MainActivity : ComponentActivity() {
                                 }.onFailure { err ->
                                     Log.e("CrewRP", "write failed", err)
                                     runOnUiThread {
-                                        content = content.copy(writeError = "저장하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+                                        content = content.copy(writeError = writeFailureMessage(err.message ?: err.toString()))
                                     }
                                 }
                             }
@@ -246,27 +247,47 @@ class MainActivity : ComponentActivity() {
                                 )
                                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                             },
+                            onLogout = {
+                                flow.logout()
+                                session = null
+                                repos = emptyList()
+                                content = CrewContent()
+                                error = null
+                                deviceRegistered = false
+                            },
                         )
                     }
-                    repos.isNotEmpty() -> CrewStartScreen(repos, error) { repo ->
-                        error = null
-                        thread {
-                            runCatching { flow.registerCrew(repo) }
-                                .onSuccess { registered ->
-                                    runOnUiThread {
-                                        session = registered
-                                        content = CrewContent(loading = true)
-                                        error = null
+                    repos.isNotEmpty() -> CrewStartScreen(
+                        repos = repos,
+                        error = error,
+                        onSelect = { repo ->
+                            error = null
+                            thread {
+                                runCatching { flow.registerCrew(repo) }
+                                    .onSuccess { registered ->
+                                        runOnUiThread {
+                                            session = registered
+                                            content = CrewContent(loading = true)
+                                            error = null
+                                        }
                                     }
-                                }
-                                .onFailure { err ->
-                                    Log.e("CrewRP", "register crew failed", err)
-                                    runOnUiThread {
-                                        error = "크루를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요."
+                                    .onFailure { err ->
+                                        Log.e("CrewRP", "register crew failed", err)
+                                        runOnUiThread {
+                                            error = "크루를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요."
+                                        }
                                     }
-                                }
-                        }
-                    }
+                            }
+                        },
+                        onLogout = {
+                            flow.logout()
+                            session = null
+                            repos = emptyList()
+                            content = CrewContent()
+                            error = null
+                            deviceRegistered = false
+                        },
+                    )
                     else -> LoginScreen(error) {
                         error = null
                         val challenge = flow.beginLogin()

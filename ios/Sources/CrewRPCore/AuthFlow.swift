@@ -115,4 +115,10 @@ public final class AuthFlow: @unchecked Sendable {
         try cache.putSession(session)
         return session
     }
+
+    public func logout() throws {
+        try tokens.clearAccessToken()
+        try pendingStore.clear()
+        try cache.clearSession()
+    }
 }

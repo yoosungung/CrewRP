@@ -1,5 +1,7 @@
 package app.crewrp.core
 
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,6 +34,8 @@ class PKCETest {
         assertTrue(url.contains("code_challenge=chal"))
         assertTrue(url.contains("code_challenge_method=S256"))
         assertTrue(url.contains("response_type=code"))
+        // Projects v2 mutations require the dedicated `project` scope (repo alone is not enough).
+        assertTrue(url.contains("scope=read%3Aorg+repo+project") || url.contains("scope=read%3Aorg%20repo%20project"))
     }
 }
 
@@ -211,6 +215,43 @@ class AuthFlowTest {
     }
 
     @Test
+    fun logoutClearsTokenSessionAndPendingOauth() {
+        val pending = InMemoryPendingLoginStore()
+        val transport = HttpTransport { _, url, _, _ ->
+            when {
+                url.endsWith("/oauth/token") -> HttpResult(200, """{"access_token":"gho_ok"}""")
+                url.contains("/user/repos") ->
+                    HttpResult(
+                        200,
+                        """[{"name":"box","full_name":"crew/box","private":true,
+                            "permissions":{"admin":true},"owner":{"login":"crew"}}]""",
+                    )
+                url.endsWith("/user/teams") -> HttpResult(200, "[]")
+                else -> error("unexpected $url")
+            }
+        }
+        JdbcCacheStore(":memory:").use { cache ->
+            val tokens = InMemoryTokenStore()
+            val flow = AuthFlow(
+                AuthConfig("cid", "crewrp://oauth/callback", "https://auth.example"),
+                AuthBridgeClient("https://auth.example", transport),
+                GitHubMembershipClient(transport),
+                tokens,
+                cache,
+                pending,
+            )
+            val challenge = flow.beginLogin()
+            val repos = flow.completeLogin("crewrp://oauth/callback?code=x&state=${challenge.state}")
+            flow.registerCrew(repos[0])
+            flow.beginLogin()
+            flow.logout()
+            assertEquals(null, tokens.loadAccessToken())
+            assertEquals(null, cache.session())
+            assertEquals(null, pending.load())
+        }
+    }
+
+    @Test
     fun completesLoginAfterNewAuthFlowUsingPersistedPending() {
         val pending = InMemoryPendingLoginStore()
         val transport = HttpTransport { _, url, _, _ ->
@@ -347,6 +388,32 @@ class Phase2Test {
     }
 }
 
+class UrlHttpTransportTest {
+    @Test
+    fun sendsPatchViaMethodOverride() {
+        var seenMethod = ""
+        var seenOverride = ""
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            seenMethod = exchange.requestMethod
+            seenOverride = exchange.requestHeaders.getFirst("X-HTTP-Method-Override").orEmpty()
+            val bytes = "{}".toByteArray()
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        server.start()
+        try {
+            val url = "http://127.0.0.1:${server.address.port}/"
+            val result = UrlHttpTransport().exchange("PATCH", url, emptyMap(), """{"body":"x"}""")
+            assertEquals(200, result.status)
+            assertEquals("POST", seenMethod)
+            assertEquals("PATCH", seenOverride)
+        } finally {
+            server.stop(0)
+        }
+    }
+}
+
 class ShellPresentationTest {
     @Test
     fun labelsRoleLaneAndDueDate() {
@@ -418,6 +485,83 @@ class ShellPresentationTest {
     }
 
     @Test
+    fun firstProjectNumberReadsUserProjectsIgnoringOrgError() {
+        val payload = """
+            {"data":{"organization":null,"user":{"projectsV2":{"nodes":[{"number":3},{"number":1}]}}},
+             "errors":[{"type":"NOT_FOUND","path":["organization"]}]}
+        """.trimIndent()
+        val n = ProjectsClient(HttpTransport { _, _, _, _ -> HttpResult(200, payload) })
+            .firstProjectNumber("yoosungung", "tok")
+        assertEquals(1, n)
+    }
+
+    @Test
+    fun resolveProjectNumberFallsBackWhenPreferredMissing() {
+        var calls = 0
+        val transport = HttpTransport { _, _, _, body ->
+            calls++
+            val q = body.orEmpty()
+            when {
+                q.contains("projectV2(number") && calls == 1 ->
+                    HttpResult(
+                        200,
+                        """{"data":{"organization":null,"user":{"projectV2":null}},
+                           "errors":[{"type":"NOT_FOUND","path":["organization"]}]}""",
+                    )
+                q.contains("projectsV2") ->
+                    HttpResult(
+                        200,
+                        """{"data":{"organization":null,"user":{"projectsV2":{"nodes":[{"number":2}]}}},
+                           "errors":[{"type":"NOT_FOUND","path":["organization"]}]}""",
+                    )
+                else -> error("unexpected graphql: $q")
+            }
+        }
+        assertEquals(2, ProjectsClient(transport).resolveProjectNumber("alice", 1, "tok"))
+    }
+
+    @Test
+    fun loadFieldMetaToleratesOrganizationNotFoundForUserLogin() {
+        val payload = """
+            {"data":{"organization":null,"user":{"projectV2":{"id":"P1","fields":{"nodes":[
+              {"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]}
+            ]}}}},
+             "errors":[{"type":"NOT_FOUND","path":["organization"],"message":"Could not resolve to an Organization"}]}
+        """.trimIndent()
+        val meta = ProjectsClient(HttpTransport { _, _, _, _ -> HttpResult(200, payload) })
+            .loadFieldMeta("yoosungung", 1, "tok")
+        assertEquals("P1", meta!!.projectId)
+        assertEquals("o1", meta.statusOptions["접수"])
+    }
+
+    @Test
+    fun createTaskClosesIssueWhenProjectMetaMissing() {
+        val calls = mutableListOf<String>()
+        val client = ProjectsClient(HttpTransport { method, url, _, _ ->
+            calls += "$method $url"
+            when {
+                method == "POST" && url.endsWith("/issues") ->
+                    HttpResult(201, """{"number":42,"node_id":"I_1"}""")
+                method == "POST" && url.endsWith("/graphql") ->
+                    HttpResult(
+                        200,
+                        """{"data":{"organization":{"projectV2":null},"user":{"projectV2":null}}}""",
+                    )
+                method == "PATCH" && url.endsWith("/issues/42") ->
+                    HttpResult(200, """{"state":"closed"}""")
+                else -> error("$method $url")
+            }
+        })
+        try {
+            client.createTask("a", "b", "title", "", 1, "tok", null)
+            error("expected createTask to fail")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message.orEmpty().contains("missing project"))
+        }
+        assertTrue(calls.any { it.startsWith("PATCH ") && it.endsWith("/issues/42") })
+    }
+
+    @Test
     fun listNoticesAndThreadComments() {
         val notices = DiscussionsClient(HttpTransport { _, _, _, _ ->
             HttpResult(
@@ -441,6 +585,12 @@ class ShellPresentationTest {
         assertEquals(true, canMutate(TeamRole.ADMIN, "other", "me"))
         assertEquals(true, canMutate(TeamRole.MEMBER, "me", "me"))
         assertEquals(false, canMutate(TeamRole.MEMBER, "other", "me"))
+    }
+
+    @Test
+    fun writeFailureMessageGuidesReloginOnMissingScopes() {
+        assertTrue(writeFailureMessage("requires one of the following scopes: ['project']").contains("다시 로그인"))
+        assertEquals("저장하지 못했습니다. 잠시 후 다시 시도해 주세요.", writeFailureMessage("timeout"))
     }
 
     @Test
@@ -469,6 +619,25 @@ class ShellPresentationTest {
         assertEquals("D1", created.id)
         assertEquals("수정", client.updateNotice("D1", "수정", "본문2", "t").title)
         client.deleteNotice("D1", "t")
+    }
+
+    @Test
+    fun ensureTalkIssueCreatesWhenMissing() {
+        var created = false
+        val talk = ThreadTalkClient(HttpTransport { method, url, _, body ->
+            when {
+                method == "GET" && url.contains("state=open") -> HttpResult(200, "[]")
+                method == "GET" && url.endsWith("/issues/1") -> HttpResult(404, "")
+                method == "POST" && url.endsWith("/issues") -> {
+                    created = true
+                    assertTrue(body!!.contains(ThreadTalkClient.TALK_ISSUE_TITLE))
+                    HttpResult(201, """{"number":7}""")
+                }
+                else -> error("$method $url")
+            }
+        })
+        assertEquals(7, talk.ensureTalkIssueNumber("a", "b", "t"))
+        assertTrue(created)
     }
 
     @Test

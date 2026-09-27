@@ -22,12 +22,13 @@ public struct ETagRESTClient: Sendable {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        if let etag = try cache.cacheEntry(url: key)?.etag {
+        // Cache is best-effort — a corrupt/busy sqlite must not fail the network read.
+        if let etag = try? cache.cacheEntry(url: key)?.etag {
             request.setValue(etag, forHTTPHeaderField: "If-None-Match")
         }
 
         let (data, response) = try await transport.data(for: request)
-        if response.statusCode == 304, let cached = try cache.cacheEntry(url: key) {
+        if response.statusCode == 304, let cached = try? cache.cacheEntry(url: key) {
             return CachedHTTPResponse(
                 statusCode: 304,
                 body: Data(cached.body.utf8),
@@ -40,7 +41,7 @@ public struct ETagRESTClient: Sendable {
         }
         let etag = response.value(forHTTPHeaderField: "Etag") ?? response.value(forHTTPHeaderField: "ETag")
         let body = String(data: data, encoding: .utf8) ?? ""
-        try cache.putCacheEntry(url: key, body: body, etag: etag)
+        try? cache.putCacheEntry(url: key, body: body, etag: etag)
         return CachedHTTPResponse(statusCode: response.statusCode, body: data, etag: etag, fromCache: false)
     }
 }

@@ -33,7 +33,7 @@ object GitHubOAuth {
         redirectUri: String,
         state: String,
         codeChallenge: String,
-        scope: String = "read:org repo",
+        scope: String = "read:org repo project",
     ): String {
         val params = linkedMapOf(
             "client_id" to clientId,

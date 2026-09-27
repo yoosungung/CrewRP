@@ -52,6 +52,61 @@ public struct ProjectsClient: Sendable {
         cards.sorted { ($0.dueOn ?? "9999") < ($1.dueOn ?? "9999") }
     }
 
+    public func firstProjectNumber(owner: String, token: String) async throws -> Int? {
+        let query = """
+        query($login:String!){
+          organization(login:$login){ projectsV2(first:20){ nodes{ number } } }
+          user(login:$login){ projectsV2(first:20){ nodes{ number } } }
+        }
+        """
+        let data = try await graphql(token: token, query: query, variables: ["login": owner])
+        guard
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let dataObj = root["data"] as? [String: Any]
+        else { return nil }
+        func numbers(_ key: String) -> [Int] {
+            let nodes = ((dataObj[key] as? [String: Any])?["projectsV2"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
+            return nodes.compactMap { $0["number"] as? Int }
+        }
+        return (numbers("organization") + numbers("user")).min()
+    }
+
+    public func createUserProject(ownerLogin: String, title: String, token: String) async throws -> Int {
+        let idData = try await graphql(
+            token: token,
+            query: "query($login:String!){ user(login:$login){ id } }",
+            variables: ["login": ownerLogin]
+        )
+        guard
+            let idRoot = try JSONSerialization.jsonObject(with: idData) as? [String: Any],
+            let ownerId = ((idRoot["data"] as? [String: Any])?["user"] as? [String: Any])?["id"] as? String
+        else { throw GitHubAPIError.httpStatus(500) }
+        let created = try await graphql(
+            token: token,
+            query: """
+            mutation($ownerId:ID!,$title:String!){
+              createProjectV2(input:{ownerId:$ownerId,title:$title}){ projectV2 { number } }
+            }
+            """,
+            variables: ["ownerId": ownerId, "title": title]
+        )
+        guard
+            let root = try JSONSerialization.jsonObject(with: created) as? [String: Any],
+            let number = (((root["data"] as? [String: Any])?["createProjectV2"] as? [String: Any])?["projectV2"] as? [String: Any])?["number"] as? Int
+        else { throw GitHubAPIError.httpStatus(500) }
+        return number
+    }
+
+    public func resolveProjectNumber(owner: String, preferred: Int, token: String) async throws -> Int {
+        if try await loadFieldMeta(owner: owner, projectNumber: preferred, token: token) != nil {
+            return preferred
+        }
+        if let existing = try await firstProjectNumber(owner: owner, token: token) {
+            return existing
+        }
+        return try await createUserProject(ownerLogin: owner, title: "CrewRP", token: token)
+    }
+
     public func loadFieldMeta(owner: String, projectNumber: Int, token: String) async throws -> ProjectFieldMeta? {
         let query = """
         query($login:String!,$number:Int!){
@@ -100,7 +155,7 @@ public struct ProjectsClient: Sendable {
                         options[name] = id
                     }
                 }
-            case "Due":
+            case "Due", "Date":
                 dueFieldId = node["id"] as? String
             default:
                 break
@@ -139,8 +194,22 @@ public struct ProjectsClient: Sendable {
             let node_id: String
         }
         let issue = try JSONDecoder().decode(IssueDTO.self, from: data)
-        guard let meta = try await loadFieldMeta(owner: owner, projectNumber: projectNumber, token: token) else {
-            throw GitHubAPIError.invalidResponse
+        let meta: ProjectFieldMeta
+        do {
+            guard let loaded = try await loadFieldMeta(owner: owner, projectNumber: projectNumber, token: token) else {
+                throw GitHubAPIError.invalidResponse
+            }
+            meta = loaded
+        } catch {
+            // Avoid orphan issues when project scope/meta is missing.
+            var close = URLRequest(url: apiBase.appending(path: "repos/\(owner)/\(repo)/issues/\(issue.number)"))
+            close.httpMethod = "PATCH"
+            close.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            close.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            close.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            close.httpBody = try? JSONSerialization.data(withJSONObject: ["state": "closed"])
+            _ = try? await transport.data(for: close)
+            throw error
         }
         let addQuery = """
         mutation($projectId:ID!,$contentId:ID!){
@@ -298,7 +367,7 @@ public struct ProjectsClient: Sendable {
             for field in fields {
                 let fieldName = (field["field"] as? [String: Any])?["name"] as? String
                 if fieldName == "Status", let name = field["name"] as? String { status = name }
-                if fieldName == "Due", let date = field["date"] as? String { due = date }
+                if fieldName == "Due" || fieldName == "Date", let date = field["date"] as? String { due = date }
             }
             return TaskCard(
                 id: id,

@@ -115,13 +115,11 @@ public struct GitHubMembershipClient: Sendable {
     }
 
     private func get<T: Decodable>(path: String, token: String) async throws -> [T] {
-        let url: URL
-        if path.contains("?") {
-            url = URL(string: apiBase.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/" + path)!
-        } else {
-            url = apiBase.appending(path: path)
+        guard let url = Self.apiURL(base: apiBase, path: path) else {
+            throw GitHubAPIError.invalidResponse
         }
         var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
@@ -131,5 +129,22 @@ public struct GitHubMembershipClient: Sendable {
             throw GitHubAPIError.httpStatus(response.statusCode)
         }
         return try JSONDecoder().decode([T].self, from: data)
+    }
+
+    public static func apiURL(base: URL, path: String) -> URL? {
+        let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let pathOnly = String(parts[0])
+        var components = URLComponents(url: base.appending(path: pathOnly), resolvingAgainstBaseURL: false)
+        if parts.count == 2 {
+            components?.queryItems = String(parts[1]).split(separator: "&").compactMap { pair in
+                let kv = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                guard let name = kv.first else { return nil }
+                return URLQueryItem(
+                    name: String(name),
+                    value: kv.count > 1 ? String(kv[1]) : nil
+                )
+            }
+        }
+        return components?.url
     }
 }

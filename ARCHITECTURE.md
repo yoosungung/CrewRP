@@ -45,7 +45,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` | REST Contents API. 마크다운은 앱이 렌더 |
 | 첨부 파일 | 첨부 | Releases Assets | REST. 파일당 100MB 이상 2GB 이하. 본문에는 asset URL만 삽입 |
 | 정기 과업 | 자동 업무 | Actions | `workflow_dispatch` 또는 cron. private repository 포함 분(分) 안에서만 |
-| 스레드 톡 | 스레드 톡 | Issue / Discussion comments, Reactions | 댓글 목록을 말풍선으로 표시. Reaction은 Reactions API |
+| 스레드 톡 | 스레드 톡 | Issue comments (제목 `스레드 톡` 또는 `#1`), Reactions | 앱이 Issue를 확보한 뒤 댓글을 말풍선으로 표시 |
 | 음성 / 잡담 | 바로 대화 | 없음 | Discord 딥링크 |
 | 알림 | 알림 | Webhook | Phase 3. Webhook → Cloudflare Worker → FCM |
 
@@ -53,7 +53,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 
 ## 4. 인증과 권한
 
-1. 앱이 `code_verifier`를 만들고 `code_challenge`(S256)를 붙인 authorize URL을 시스템 브라우저로 연다.
+1. 앱이 `code_verifier`를 만들고 `code_challenge`(S256)를 붙인 authorize URL을 시스템 브라우저로 연다. 요청 scope는 `read:org repo project`(Org·저장소·Projects v2 쓰기).
 2. 리다이렉트 URI로 돌아온 `code`와 `code_verifier`를 `auth-bridge`에 넘긴다. Worker가 `client_secret`으로 GitHub와 교환하고, 토큰은 응답으로 기기에만 전달한다.
 3. 토큰으로 **가입된** 크루(Org `members`/`admins` Team 또는 초대 수락 저장소)와, 아직 owner가 없을 때만 **등록 후보**(admin private repo)를 보여 준다.
 4. 사용자가 크루를 고르면 그 `owner/repo`를 **활성 세션**으로 둔다. owner 등록은 계정당 1회(기존 owner가 없을 때)만 허용한다.
