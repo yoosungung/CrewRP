@@ -9,6 +9,14 @@ cd ios
 swift test
 # 앱: CrewRPApp.xcodeproj 를 Xcode에서 열어 시뮬레이터 실행
 
+# 실기기 (App Store / TestFlight 아님). USB Trust → Developer Mode → Xcode Run:
+# 1) 기기 Settings → Privacy & Security → Developer Mode (Xcode 페어링 후에만 보임) → Restart → Enable
+# 2) Xcode: scheme CrewRP, destination=연결된 iPhone, Signing & Capabilities → Automatically manage signing + Team
+# 3) Run. Personal Team 개발 프로파일은 약 7일 만료 가능(유료 계정은 사람 결정).
+# CLI (기기가 xctrace에서 Offline이 아닐 때):
+# xcodebuild -project CrewRPApp.xcodeproj -scheme CrewRP -destination 'id=<UDID>' build
+# 설치 후 기동은 Xcode Run이 담당. 코어 CRUD는 호스트 e2e-crud.sh; 셸 UI는 수동 체크리스트(공지/톡/자료/할 일 C-U-D).
+
 # 실 GitHub CRUD E2E (코어 클라이언트 = 앱과 동일 경로)
 CREWRP_E2E_TOKEN=… CREWRP_E2E_REPO=owner/repo ../scripts/e2e-crud.sh
 # 공지·톡·자료는 repo면 충분. 할 일은 project 스코프 또는 Android DeviceCrudSmokeTest(앱 세션).

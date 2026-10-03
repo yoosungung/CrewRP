@@ -14,9 +14,18 @@ cd android
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n app.crewrp/.MainActivity
 
-# 실 GitHub CRUD E2E (공지·톡·자료 JVM; 할 일은 project 토큰 또는 로그인된 에뮬 앱 세션)
+# 실 GitHub CRUD E2E (공지·톡·자료 JVM; 할 일은 project 토큰 또는 로그인된 기기/에뮬 앱 세션)
 CREWRP_E2E_TOKEN=… CREWRP_E2E_REPO=owner/repo ../scripts/e2e-crud.sh
 # 기기 전체 CRUD(세션 유지): adb install -r … && adb shell am instrument -w -e class app.crewrp.DeviceCrudSmokeTest …
+
+# 실기기 USB (Play Store 아님). 개발자 옵션 → USB debugging → 호스트 승인 후:
+export PATH="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}/platform-tools:$PATH"
+adb devices -l                    # 상태가 device (unauthorized면 폰에서 Allow USB debugging)
+./gradlew :app:installDebug       # 또는 assembleDebug 후 adb -d install -r app/build/outputs/apk/debug/app-debug.apk
+adb -d shell am start -n app.crewrp/.MainActivity
+# e2e-crud.sh는 adb devices에 device가 있으면 DeviceCrudSmokeTest를 돌림.
+# 에뮬+USB 동시면 USB만: adb -d … 또는 ANDROID_SERIAL=<usb-serial>
+# 수동 CRUD: 로그인·크루 등록 후 공지/톡/자료/할 일 각 1회 작성·수정·삭제
 ```
 
 할 일 Projects v2 번호는 `BuildConfig.PROJECT_NUMBER`(기본 1)를 쓰되, 없으면 `ProjectsClient.resolveProjectNumber`가 기존 프로젝트를 고르거나 `CrewRP` 프로젝트를 만든다.
