@@ -114,6 +114,13 @@ class DocsClient(
     }
 }
 
+internal fun isProjectsDueFieldName(name: String?): Boolean {
+    val n = name?.trim() ?: return false
+    return n.equals("Due", ignoreCase = true) ||
+        n.equals("Date", ignoreCase = true) ||
+        n.equals("Due date", ignoreCase = true)
+}
+
 data class TaskCard(
     val id: String,
     val title: String,
@@ -255,8 +262,9 @@ class ProjectsClient(
         val options = mutableMapOf<String, String>()
         project["fields"]?.jsonObject?.get("nodes")?.jsonArray?.forEach { node ->
             if (node !is JsonObject) return@forEach
-            when (node["name"].textOrNull()) {
-                "Status" -> {
+            val fieldName = node["name"].textOrNull()
+            when {
+                fieldName == "Status" -> {
                     statusFieldId = node["id"].textOrNull()
                     node["options"]?.jsonArray?.forEach { opt ->
                         val o = opt as? JsonObject ?: return@forEach
@@ -265,7 +273,7 @@ class ProjectsClient(
                         options[name] = id
                     }
                 }
-                "Due", "Date" -> dueFieldId = node["id"].textOrNull()
+                isProjectsDueFieldName(fieldName) -> dueFieldId = node["id"].textOrNull()
             }
         }
         return ProjectFieldMeta(projectId, statusFieldId, dueFieldId, options)
@@ -474,9 +482,10 @@ class ProjectsClient(
             var due: String? = null
             element["fieldValues"]?.jsonObject?.get("nodes")?.jsonArray?.forEach { fieldEl ->
                 if (fieldEl !is JsonObject) return@forEach
-                when (fieldEl["field"]?.takeUnless { it is JsonNull }?.jsonObject?.get("name").textOrNull()) {
-                    "Status" -> fieldEl["name"].textOrNull()?.let { status = it }
-                    "Due", "Date" -> due = fieldEl["date"].textOrNull()
+                val fieldName = fieldEl["field"]?.takeUnless { it is JsonNull }?.jsonObject?.get("name").textOrNull()
+                when {
+                    fieldName == "Status" -> fieldEl["name"].textOrNull()?.let { status = it }
+                    isProjectsDueFieldName(fieldName) -> due = fieldEl["date"].textOrNull()
                 }
             }
             TaskCard(id, title, status, due, issueNumber, contentId)
