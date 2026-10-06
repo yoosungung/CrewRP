@@ -219,10 +219,11 @@ class ProjectsClient(
               organization(login:${'$'}login){
                 projectV2(number:${'$'}number){
                   id
-                  fields(first:20){
+                  fields(first:50){
                     nodes{
                       ... on ProjectV2SingleSelectField { id name options { id name } }
-                      ... on ProjectV2Field { id name }
+                  ... on ProjectV2Field { id name dataType }
+                  ... on ProjectV2FieldCommon { id name }
                     }
                   }
                 }
@@ -230,10 +231,11 @@ class ProjectsClient(
               user(login:${'$'}login){
                 projectV2(number:${'$'}number){
                   id
-                  fields(first:20){
+                  fields(first:50){
                     nodes{
                       ... on ProjectV2SingleSelectField { id name options { id name } }
-                      ... on ProjectV2Field { id name }
+                  ... on ProjectV2Field { id name dataType }
+                  ... on ProjectV2FieldCommon { id name }
                     }
                   }
                 }
@@ -259,10 +261,12 @@ class ProjectsClient(
         val projectId = project["id"].textOrNull() ?: return null
         var statusFieldId: String? = null
         var dueFieldId: String? = null
+        var dateFieldId: String? = null
         val options = mutableMapOf<String, String>()
         project["fields"]?.jsonObject?.get("nodes")?.jsonArray?.forEach { node ->
             if (node !is JsonObject) return@forEach
             val fieldName = node["name"].textOrNull()
+            val dataType = node["dataType"].textOrNull()
             when {
                 fieldName == "Status" -> {
                     statusFieldId = node["id"].textOrNull()
@@ -274,9 +278,29 @@ class ProjectsClient(
                     }
                 }
                 isProjectsDueFieldName(fieldName) -> dueFieldId = node["id"].textOrNull()
+                dataType.equals("DATE", ignoreCase = true) && dateFieldId == null ->
+                    dateFieldId = node["id"].textOrNull()
             }
         }
-        return ProjectFieldMeta(projectId, statusFieldId, dueFieldId, options)
+        return ProjectFieldMeta(projectId, statusFieldId, dueFieldId ?: dateFieldId, options)
+    }
+
+    fun ensureDueDateField(meta: ProjectFieldMeta, owner: String, projectNumber: Int, token: String): ProjectFieldMeta {
+        if (meta.dueFieldId != null) return meta
+        Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            mutation(${'$'}projectId:ID!){
+              createProjectV2Field(input:{projectId:${'$'}projectId,dataType:DATE,name:"Due date"}){
+                projectV2Field { ... on ProjectV2Field { id name } }
+              }
+            }
+            """.trimIndent(),
+            buildJsonObject { put("projectId", meta.projectId) },
+        )
+        return loadFieldMeta(owner, projectNumber, token) ?: meta
     }
 
     fun createTask(
@@ -299,7 +323,8 @@ class ProjectsClient(
         val number = issue["number"]?.jsonPrimitive?.content?.toIntOrNull() ?: error("missing issue number")
         val nodeId = issue["node_id"].textOrNull() ?: error("missing node_id")
         val meta = try {
-            loadFieldMeta(owner, projectNumber, token) ?: error("missing project")
+            val loaded = loadFieldMeta(owner, projectNumber, token) ?: error("missing project")
+            ensureDueDateField(loaded, owner, projectNumber, token)
         } catch (e: Throwable) {
             // Avoid orphan issues when project scope/meta is missing.
             runCatching {
@@ -486,6 +511,7 @@ class ProjectsClient(
                 when {
                     fieldName == "Status" -> fieldEl["name"].textOrNull()?.let { status = it }
                     isProjectsDueFieldName(fieldName) -> due = fieldEl["date"].textOrNull()
+                    due == null -> fieldEl["date"].textOrNull()?.let { due = it }
                 }
             }
             TaskCard(id, title, status, due, issueNumber, contentId)

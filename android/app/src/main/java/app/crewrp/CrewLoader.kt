@@ -111,15 +111,20 @@ class CrewWriter(
         projects.createTask(owner, repo, title, "", resolvedProjectNumber(), token, dueOn)
 
     fun updateTask(meta: ProjectFieldMeta, card: TaskCard, statusLabel: String, dueOn: String?) {
-        val opt = meta.statusOptions.entries.firstOrNull {
+        val ready = if (dueOn != null) {
+            projects.ensureDueDateField(meta, session.org, resolvedProjectNumber(), token)
+        } else {
+            meta
+        }
+        val opt = ready.statusOptions.entries.firstOrNull {
             it.key == statusLabel || taskLane(it.key) == taskLane(statusLabel)
         }?.value
         ProjectsClient(transport).updateTaskFields(
-            meta.projectId,
+            ready.projectId,
             card.id,
-            meta.statusFieldId,
+            ready.statusFieldId,
             opt,
-            meta.dueFieldId,
+            ready.dueFieldId,
             dueOn,
             token,
         )

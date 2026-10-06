@@ -113,10 +113,11 @@ public struct ProjectsClient: Sendable {
           organization(login:$login){
             projectV2(number:$number){
               id
-              fields(first:20){
+              fields(first:50){
                 nodes{
                   ... on ProjectV2SingleSelectField { id name options { id name } }
-                  ... on ProjectV2Field { id name }
+                  ... on ProjectV2Field { id name dataType }
+                  ... on ProjectV2FieldCommon { id name }
                 }
               }
             }
@@ -124,10 +125,11 @@ public struct ProjectsClient: Sendable {
           user(login:$login){
             projectV2(number:$number){
               id
-              fields(first:20){
+              fields(first:50){
                 nodes{
                   ... on ProjectV2SingleSelectField { id name options { id name } }
-                  ... on ProjectV2Field { id name }
+                  ... on ProjectV2Field { id name dataType }
+                  ... on ProjectV2FieldCommon { id name }
                 }
               }
             }
@@ -144,10 +146,12 @@ public struct ProjectsClient: Sendable {
         guard let project, let projectId = project["id"] as? String else { return nil }
         var statusFieldId: String?
         var dueFieldId: String?
+        var dateFieldId: String?
         var options: [String: String] = [:]
         let nodes = ((project["fields"] as? [String: Any])?["nodes"] as? [[String: Any]]) ?? []
         for node in nodes {
             let fieldName = node["name"] as? String
+            let dataType = node["dataType"] as? String
             switch fieldName {
             case "Status":
                 statusFieldId = node["id"] as? String
@@ -159,15 +163,35 @@ public struct ProjectsClient: Sendable {
             default:
                 if isProjectsDueFieldName(fieldName) {
                     dueFieldId = node["id"] as? String
+                } else if dataType?.uppercased() == "DATE", dateFieldId == nil {
+                    dateFieldId = node["id"] as? String
                 }
             }
         }
         return ProjectFieldMeta(
             projectId: projectId,
             statusFieldId: statusFieldId,
-            dueFieldId: dueFieldId,
+            dueFieldId: dueFieldId ?? dateFieldId,
             statusOptions: options
         )
+    }
+
+    public func ensureDueDateField(
+        meta: ProjectFieldMeta,
+        owner: String,
+        projectNumber: Int,
+        token: String
+    ) async throws -> ProjectFieldMeta {
+        if meta.dueFieldId != nil { return meta }
+        let mutation = """
+        mutation($projectId:ID!){
+          createProjectV2Field(input:{projectId:$projectId,dataType:DATE,name:"Due date"}){
+            projectV2Field { ... on ProjectV2Field { id name } }
+          }
+        }
+        """
+        _ = try await graphql(token: token, query: mutation, variables: ["projectId": meta.projectId])
+        return try await loadFieldMeta(owner: owner, projectNumber: projectNumber, token: token) ?? meta
     }
 
     public func createTask(
@@ -200,7 +224,7 @@ public struct ProjectsClient: Sendable {
             guard let loaded = try await loadFieldMeta(owner: owner, projectNumber: projectNumber, token: token) else {
                 throw GitHubAPIError.invalidResponse
             }
-            meta = loaded
+            meta = try await ensureDueDateField(meta: loaded, owner: owner, projectNumber: projectNumber, token: token)
         } catch {
             // Avoid orphan issues when project scope/meta is missing.
             var close = URLRequest(url: apiBase.appending(path: "repos/\(owner)/\(repo)/issues/\(issue.number)"))
@@ -368,7 +392,9 @@ public struct ProjectsClient: Sendable {
             for field in fields {
                 let fieldName = (field["field"] as? [String: Any])?["name"] as? String
                 if fieldName == "Status", let name = field["name"] as? String { status = name }
-                if isProjectsDueFieldName(fieldName), let date = field["date"] as? String { due = date }
+                if let date = field["date"] as? String {
+                    if isProjectsDueFieldName(fieldName) || due == nil { due = date }
+                }
             }
             return TaskCard(
                 id: id,

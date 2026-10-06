@@ -557,6 +557,74 @@ class ShellPresentationTest {
     }
 
     @Test
+    fun loadFieldMetaQueryAsksForFieldCommonAndFiftyFields() {
+        var body: String? = null
+        val transport = HttpTransport { _, _, _, raw ->
+            body = raw
+            HttpResult(
+                200,
+                """{"data":{"user":{"projectV2":{"id":"P1","fields":{"nodes":[
+                  {"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]},
+                  {"id":"D1","name":"Due date"}
+                ]}}}}}""",
+            )
+        }
+        val meta = ProjectsClient(transport).loadFieldMeta("yoosungung", 1, "tok")
+        assertEquals("D1", meta!!.dueFieldId)
+        val sent = body!!
+        assertTrue(sent.contains("fields(first:50)"))
+        assertTrue(sent.contains("ProjectV2FieldCommon"))
+    }
+
+    @Test
+    fun loadFieldMetaUsesDateDataTypeWhenNameIsNotDue() {
+        val payload = """
+            {"data":{"user":{"projectV2":{"id":"P1","fields":{"nodes":[
+              {"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]},
+              {"id":"D1","name":"마감일","dataType":"DATE"}
+            ]}}}}}
+        """.trimIndent()
+        val meta = ProjectsClient(HttpTransport { _, _, _, _ -> HttpResult(200, payload) })
+            .loadFieldMeta("yoosungung", 1, "tok")
+        assertEquals("D1", meta!!.dueFieldId)
+    }
+
+    @Test
+    fun ensureDueDateFieldCreatesDateFieldWhenMissing() {
+        var calls = 0
+        val transport = HttpTransport { _, _, _, body ->
+            calls++
+            val q = body.orEmpty()
+            when {
+                q.contains("createProjectV2Field") -> {
+                    assertTrue(q.contains("Due date"))
+                    HttpResult(200, """{"data":{"createProjectV2Field":{"projectV2Field":{"id":"D1","name":"Due date"}}}}""")
+                }
+                q.contains("fields(first") && calls > 2 ->
+                    HttpResult(
+                        200,
+                        """{"data":{"user":{"projectV2":{"id":"P1","fields":{"nodes":[
+                          {"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]},
+                          {"id":"D1","name":"Due date","dataType":"DATE"}
+                        ]}}}}}""",
+                    )
+                else ->
+                    HttpResult(
+                        200,
+                        """{"data":{"user":{"projectV2":{"id":"P1","fields":{"nodes":[
+                          {"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]}
+                        ]}}}}}""",
+                    )
+            }
+        }
+        val client = ProjectsClient(transport)
+        val before = client.loadFieldMeta("yoosungung", 1, "tok")!!
+        assertEquals(null, before.dueFieldId)
+        val after = client.ensureDueDateField(before, "yoosungung", 1, "tok")
+        assertEquals("D1", after.dueFieldId)
+    }
+
+    @Test
     fun loadFieldMetaToleratesOrganizationNotFoundForUserLogin() {
         val payload = """
             {"data":{"organization":null,"user":{"projectV2":{"id":"P1","fields":{"nodes":[

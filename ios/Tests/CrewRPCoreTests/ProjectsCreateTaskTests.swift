@@ -45,9 +45,12 @@ struct ProjectsCreateTaskTests {
     @Test("loadFieldMeta and listTasks recognize GitHub Due date field")
     func dueDateFieldName() async throws {
         let transport = MockHTTPTransport()
+        final class Box: @unchecked Sendable { var fieldQuery = "" }
+        let box = Box()
         transport.handler = { request in
             let body = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
             if body.contains("fields(first") {
+                box.fieldQuery = body
                 return (
                     Data(#"{"data":{"user":{"projectV2":{"id":"P1","fields":{"nodes":[{"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]},{"id":"D1","name":"Due date"}]}}}}}"#.utf8),
                     HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
@@ -61,9 +64,58 @@ struct ProjectsCreateTaskTests {
         let client = ProjectsClient(transport: transport)
         let meta = try await client.loadFieldMeta(owner: "yoosungung", projectNumber: 1, token: "tok")
         #expect(meta?.dueFieldId == "D1")
+        #expect(box.fieldQuery.contains("fields(first:50)"))
+        #expect(box.fieldQuery.contains("ProjectV2FieldCommon"))
         let cards = try await client.listTasks(org: "yoosungung", projectNumber: 1, token: "tok")
         #expect(cards.count == 1)
         #expect(cards.first?.dueOn == "2026-10-07")
+    }
+
+    @Test("loadFieldMeta uses DATE dataType when name is not Due")
+    func dueFieldFromDateDataType() async throws {
+        let transport = MockHTTPTransport()
+        transport.handler = { _ in
+            (
+                Data(#"{"data":{"user":{"projectV2":{"id":"P1","fields":{"nodes":[{"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]},{"id":"D1","name":"마감일","dataType":"DATE"}]}}}}}"#.utf8),
+                HTTPURLResponse(url: URL(string: "https://api.github.com/graphql")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            )
+        }
+        let meta = try await ProjectsClient(transport: transport).loadFieldMeta(owner: "yoosungung", projectNumber: 1, token: "tok")
+        #expect(meta?.dueFieldId == "D1")
+    }
+
+    @Test("ensureDueDateField creates DATE field when missing")
+    func ensureCreatesDueDateField() async throws {
+        let transport = MockHTTPTransport()
+        final class Box: @unchecked Sendable { var calls = 0; var created = false }
+        let box = Box()
+        transport.handler = { request in
+            let body = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
+            box.calls += 1
+            if body.contains("createProjectV2Field") {
+                box.created = true
+                return (
+                    Data(#"{"data":{"createProjectV2Field":{"projectV2Field":{"id":"D1","name":"Due date"}}}}"#.utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                )
+            }
+            if box.created {
+                return (
+                    Data(#"{"data":{"user":{"projectV2":{"id":"P1","fields":{"nodes":[{"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]},{"id":"D1","name":"Due date","dataType":"DATE"}]}}}}}"#.utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                )
+            }
+            return (
+                Data(#"{"data":{"user":{"projectV2":{"id":"P1","fields":{"nodes":[{"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]}]}}}}}"#.utf8),
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            )
+        }
+        let client = ProjectsClient(transport: transport)
+        let before = try await client.loadFieldMeta(owner: "yoosungung", projectNumber: 1, token: "tok")
+        #expect(before?.dueFieldId == nil)
+        let after = try await client.ensureDueDateField(meta: before!, owner: "yoosungung", projectNumber: 1, token: "tok")
+        #expect(after.dueFieldId == "D1")
+        #expect(box.created)
     }
 
     @Test("resolveProjectNumber falls back to listed project")
