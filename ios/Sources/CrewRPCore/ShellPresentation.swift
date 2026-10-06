@@ -23,6 +23,17 @@ public func taskLane(status: String) -> TaskLane {
     return .inbox
 }
 
+/// compact(폰)는 레인 세로 섹션, 와이드는 다열 칸반.
+public func kanbanUsesStackedLanes(compact: Bool) -> Bool { compact }
+
+public func taskStatusChoice(status: String) -> String { taskLane(status: status).title }
+
+/// 상세 납기 입력값. Projects Due는 YYYY-MM-DD.
+public func dueOnInput(_ iso: String?) -> String {
+    guard let iso, iso.count >= 10 else { return "" }
+    return String(iso.prefix(10))
+}
+
 public extension TeamRole {
     var label: String { self == .admin ? "운영진" : "멤버" }
 }

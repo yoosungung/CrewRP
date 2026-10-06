@@ -447,6 +447,16 @@ struct ShellPresentationTests {
         #expect(discordConfigured(serverId: "123", channelId: "456") == true)
     }
 
+    @Test("compact kanban stacks lanes; wide keeps columns")
+    func kanbanLayout() {
+        #expect(kanbanUsesStackedLanes(compact: true))
+        #expect(!kanbanUsesStackedLanes(compact: false))
+        #expect(taskStatusChoice(status: "In Progress") == "진행 중")
+        #expect(taskStatusChoice(status: "Todo") == "접수")
+        #expect(dueOnInput("2026-10-06T09:00:00") == "2026-10-06")
+        #expect(dueOnInput(nil) == "")
+    }
+
     @Test("home keeps today, upcoming, and three notices")
     func home() {
         let tasks = [
