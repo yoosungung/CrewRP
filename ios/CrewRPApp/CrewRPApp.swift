@@ -808,11 +808,17 @@ private struct TalkTab: View {
     @ObservedObject var model: AppModel
     @State private var draft = ""
     @State private var editing: ThreadMessage?
+    @FocusState private var composerFocused: Bool
 
     private var discordReady: Bool {
         let server = Bundle.main.object(forInfoDictionaryKey: "DiscordServerID") as? String ?? ""
         let channel = Bundle.main.object(forInfoDictionaryKey: "DiscordChannelID") as? String ?? ""
         return discordConfigured(serverId: server, channelId: channel)
+    }
+
+    private func dismissComposer() {
+        composerFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     var body: some View {
@@ -851,16 +857,26 @@ private struct TalkTab: View {
                             }
                             .padding(16)
                         }
+                        .scrollDismissesKeyboard(.immediately)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay {
+                    if composerFocused {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture { dismissComposer() }
+                    }
+                }
                 HStack {
                     TextField("메시지", text: $draft)
                         .textFieldStyle(.roundedBorder)
+                        .focused($composerFocused)
                     Button("보내기") {
                         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !body.isEmpty else { return }
                         draft = ""
+                        dismissComposer()
                         Task { await model.postTalk(body) }
                     }
                     .buttonStyle(.borderedProminent)
@@ -876,7 +892,13 @@ private struct TalkTab: View {
                 }
             }
             .navigationTitle("소통")
-            .toolbar { RefreshButton(model: model) }
+            .toolbar {
+                RefreshButton(model: model)
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("완료") { dismissComposer() }
+                }
+            }
             .refreshable { await model.refreshHomeData() }
             .sheet(item: $editing) { message in
                 ComposeSheet(
