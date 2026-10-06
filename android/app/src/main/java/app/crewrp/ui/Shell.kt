@@ -61,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -78,10 +79,13 @@ import app.crewrp.core.canMutate
 import app.crewrp.core.crewDisplayName
 import app.crewrp.core.crewOwnerName
 import app.crewrp.core.docBlocks
+import app.crewrp.core.dueOnInput
 import app.crewrp.core.formatDue
 import app.crewrp.core.homeSections
+import app.crewrp.core.kanbanUsesStackedLanes
 import app.crewrp.core.roleLabel
 import app.crewrp.core.taskLane
+import app.crewrp.core.taskStatusChoice
 import java.time.LocalDate
 
 data class CrewActions(
@@ -320,16 +324,12 @@ fun CrewShell(
         )
     }
     editingTask?.let { task ->
-        FormDialog(
-            title = "할 일 수정",
-            initialTitle = task.title,
-            titleEnabled = false,
-            initialBody = task.status,
-            bodyLabel = "상태 (접수/진행 중/완료)",
+        TaskEditDialog(
+            task = task,
             showDelete = session.teamRole == TeamRole.ADMIN,
             onDismiss = { editingTask = null },
-            onSubmit = { _, status ->
-                actions.onUpdateTask(task, status.ifBlank { task.status }, task.dueOn)
+            onSubmit = { status, due ->
+                actions.onUpdateTask(task, status, due)
                 editingTask = null
             },
             onDelete = { actions.onDeleteTask(task); editingTask = null },
@@ -348,6 +348,52 @@ fun CrewShell(
 }
 
 private enum class ComposeKind { Notice, Task, Doc }
+
+@Composable
+private fun TaskEditDialog(
+    task: TaskCard,
+    showDelete: Boolean,
+    onDismiss: () -> Unit,
+    onSubmit: (status: String, dueOn: String?) -> Unit,
+    onDelete: () -> Unit,
+) {
+    var status by remember { mutableStateOf(taskStatusChoice(task.status)) }
+    var due by remember { mutableStateOf(dueOnInput(task.dueOn)) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("할 일 수정") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(task.title, {}, label = { Text("제목") }, enabled = false, modifier = Modifier.fillMaxWidth())
+                Text("상태", style = MaterialTheme.typography.labelMedium)
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    TaskLane.entries.forEachIndexed { index, lane ->
+                        SegmentedButton(
+                            selected = status == lane.title,
+                            onClick = { status = lane.title },
+                            shape = SegmentedButtonDefaults.itemShape(index, TaskLane.entries.size),
+                        ) { Text(lane.title) }
+                    }
+                }
+                OutlinedTextField(due, { due = it }, label = { Text("납기 (YYYY-MM-DD)") }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val trimmed = dueOnInput(due)
+                onSubmit(status, trimmed.ifBlank { null })
+            }) { Text("저장") }
+        },
+        dismissButton = {
+            Row {
+                if (showDelete) {
+                    TextButton(onClick = onDelete) { Text("삭제") }
+                }
+                TextButton(onClick = onDismiss) { Text("닫기") }
+            }
+        },
+    )
+}
 
 @Composable
 private fun FormDialog(
@@ -446,6 +492,8 @@ private fun HomeTab(session: Session, content: CrewContent, modifier: Modifier, 
 @Composable
 private fun TasksTab(content: CrewContent, modifier: Modifier, onRetry: () -> Unit, onOpen: (TaskCard) -> Unit) {
     var mode by remember { mutableIntStateOf(0) }
+    val compact = LocalConfiguration.current.screenWidthDp < 600
+    val stacked = kanbanUsesStackedLanes(compact)
     when {
         content.loading && content.tasks.isEmpty() && !content.tasksFailed -> LoadingPane(modifier)
         content.tasksFailed && content.tasks.isEmpty() -> FailedPane(modifier, onRetry)
@@ -461,16 +509,16 @@ private fun TasksTab(content: CrewContent, modifier: Modifier, onRetry: () -> Un
                 }
             }
             if (mode == 0) {
-                LazyRow(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(TaskLane.entries) { lane ->
-                        val laneTasks = content.tasks.filter { taskLane(it.status) == lane }
-                        Surface(Modifier.width(260.dp), shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)) {
-                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("${lane.title} ${laneTasks.size}", style = MaterialTheme.typography.titleSmall)
-                                laneTasks.forEach { card ->
-                                    Box(Modifier.clickable { onOpen(card) }) { TaskRow(card) }
-                                }
-                            }
+                if (stacked) {
+                    LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(TaskLane.entries) { lane ->
+                            KanbanLane(content.tasks, lane, Modifier.fillMaxWidth(), onOpen)
+                        }
+                    }
+                } else {
+                    LazyRow(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(TaskLane.entries) { lane ->
+                            KanbanLane(content.tasks, lane, Modifier.width(260.dp), onOpen)
                         }
                     }
                 }
@@ -480,6 +528,19 @@ private fun TasksTab(content: CrewContent, modifier: Modifier, onRetry: () -> Un
                         Box(Modifier.clickable { onOpen(card) }) { TaskRow(card) }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KanbanLane(tasks: List<TaskCard>, lane: TaskLane, modifier: Modifier, onOpen: (TaskCard) -> Unit) {
+    val laneTasks = tasks.filter { taskLane(it.status) == lane }
+    Surface(modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("${lane.title} ${laneTasks.size}", style = MaterialTheme.typography.titleSmall)
+            laneTasks.forEach { card ->
+                Box(Modifier.clickable { onOpen(card) }) { TaskRow(card) }
             }
         }
     }

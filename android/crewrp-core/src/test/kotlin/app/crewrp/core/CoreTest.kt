@@ -5,6 +5,7 @@ import java.net.InetSocketAddress
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PKCETest {
@@ -428,6 +429,16 @@ class ShellPresentationTest {
         assertEquals("acme", crewOwnerName("acme/crew"))
         assertEquals(false, discordConfigured("REPLACE_ME", "1"))
         assertEquals(true, discordConfigured("123", "456"))
+    }
+
+    @Test
+    fun compactKanbanStacksLanesAndWideKeepsColumns() {
+        assertTrue(kanbanUsesStackedLanes(true))
+        assertFalse(kanbanUsesStackedLanes(false))
+        assertEquals("진행 중", taskStatusChoice("In Progress"))
+        assertEquals("접수", taskStatusChoice("Todo"))
+        assertEquals("2026-10-06", dueOnInput("2026-10-06T09:00:00"))
+        assertEquals("", dueOnInput(null))
     }
 
     @Test

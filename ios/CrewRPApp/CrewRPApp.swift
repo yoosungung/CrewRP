@@ -251,19 +251,23 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func updateTask(_ card: TaskCard, status: String) async {
+    func updateTask(_ card: TaskCard, status: String, dueOn: String?) async {
         guard let meta = projectMeta else { return }
         let opt = meta.statusOptions.first { key, _ in
             key == status || taskLane(status: key) == taskLane(status: status)
         }?.value
+        let due = dueOn.flatMap { value in
+            let trimmed = dueOnInput(value)
+            return trimmed.isEmpty ? nil : trimmed
+        }
         await withToken { token, _, _ in
             try await ProjectsClient(transport: transport).updateTaskFields(
                 projectId: meta.projectId,
                 itemId: card.id,
                 statusFieldId: meta.statusFieldId,
                 statusOptionId: opt,
-                dueFieldId: nil,
-                dueOn: nil,
+                dueFieldId: meta.dueFieldId,
+                dueOn: due,
                 token: token
             )
         }
@@ -600,15 +604,10 @@ private struct TasksTab: View {
                 }
             }
             .sheet(item: $editing) { task in
-                ComposeSheet(
-                    title: "할 일 수정",
-                    titleLabel: "제목",
-                    bodyLabel: "상태 (접수/진행 중/완료)",
-                    initialTitle: task.title,
-                    initialBody: task.status,
-                    titleEnabled: false,
+                TaskEditSheet(
+                    task: task,
                     showDelete: model.session?.teamRole == .admin,
-                    onSave: { _, status in Task { await model.updateTask(task, status: status) } },
+                    onSave: { status, due in Task { await model.updateTask(task, status: status, dueOn: due) } },
                     onDelete: { Task { await model.deleteTask(task) } }
                 )
             }
@@ -619,28 +618,113 @@ private struct TasksTab: View {
 private struct KanbanBoard: View {
     let tasks: [TaskCard]
     var onSelect: (TaskCard) -> Void = { _ in }
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
-        ScrollView(.horizontal) {
-            HStack(alignment: .top, spacing: 12) {
-                ForEach(TaskLane.allCases, id: \.self) { lane in
-                    let laneTasks = tasks.filter { taskLane(status: $0.status) == lane }
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(lane.title).font(.headline)
-                            Spacer()
-                            Text("\(laneTasks.count)").foregroundStyle(.secondary)
-                        }
-                        ForEach(laneTasks, id: \.id) { task in
-                            Button { onSelect(task) } label: { TaskRow(task: task) }
+        let stacked = kanbanUsesStackedLanes(compact: sizeClass == .compact)
+        if stacked {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(TaskLane.allCases, id: \.self) { lane in
+                        KanbanLaneColumn(tasks: tasks, lane: lane, stacked: true, onSelect: onSelect)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+            }
+        } else {
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(TaskLane.allCases, id: \.self) { lane in
+                        KanbanLaneColumn(tasks: tasks, lane: lane, stacked: false, onSelect: onSelect)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+}
+
+private struct KanbanLaneColumn: View {
+    let tasks: [TaskCard]
+    let lane: TaskLane
+    let stacked: Bool
+    var onSelect: (TaskCard) -> Void
+
+    var body: some View {
+        let laneTasks = tasks.filter { taskLane(status: $0.status) == lane }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(lane.title).font(.headline)
+                Spacer()
+                Text("\(laneTasks.count)").foregroundStyle(.secondary)
+            }
+            ForEach(laneTasks, id: \.id) { task in
+                Button { onSelect(task) } label: { TaskRow(task: task) }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: stacked ? .infinity : nil, alignment: .topLeading)
+        .frame(width: stacked ? nil : 260, alignment: .topLeading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+private struct TaskEditSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let task: TaskCard
+    var showDelete = false
+    var onSave: (String, String?) -> Void
+    var onDelete: (() -> Void)?
+
+    @State private var status: String
+    @State private var dueOn: String
+
+    init(
+        task: TaskCard,
+        showDelete: Bool = false,
+        onSave: @escaping (String, String?) -> Void,
+        onDelete: (() -> Void)? = nil
+    ) {
+        self.task = task
+        self.showDelete = showDelete
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _status = State(initialValue: taskStatusChoice(status: task.status))
+        _dueOn = State(initialValue: dueOnInput(task.dueOn))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("제목", text: .constant(task.title)).disabled(true)
+                Picker("상태", selection: $status) {
+                    ForEach(TaskLane.allCases, id: \.self) { lane in
+                        Text(lane.title).tag(lane.title)
+                    }
+                }
+                .pickerStyle(.segmented)
+                TextField("납기 (YYYY-MM-DD)", text: $dueOn)
+            }
+            .navigationTitle("할 일 수정")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("닫기") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("저장") {
+                        let due = dueOnInput(dueOn)
+                        onSave(status, due.isEmpty ? nil : due)
+                        dismiss()
+                    }
+                }
+                if showDelete, let onDelete {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("삭제", role: .destructive) {
+                            onDelete()
+                            dismiss()
                         }
                     }
-                    .padding(12)
-                    .frame(width: 260, alignment: .topLeading)
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
                 }
             }
-            .padding(.horizontal, 16)
         }
     }
 }

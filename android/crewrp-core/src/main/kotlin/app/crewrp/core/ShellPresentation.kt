@@ -15,6 +15,14 @@ fun taskLane(status: String): TaskLane {
     }
 }
 
+/** compact(폰)는 레인 세로 섹션, 와이드는 다열 칸반. */
+fun kanbanUsesStackedLanes(compact: Boolean): Boolean = compact
+
+fun taskStatusChoice(status: String): String = taskLane(status).title
+
+/** 상세 납기 입력값. Projects Due는 YYYY-MM-DD. */
+fun dueOnInput(iso: String?): String = iso?.take(10).orEmpty()
+
 fun roleLabel(role: TeamRole): String = if (role == TeamRole.ADMIN) "운영진" else "멤버"
 
 /** 쓰기 API 실패 문구. 스코프 부족이면 재로그인을 안내한다. */
