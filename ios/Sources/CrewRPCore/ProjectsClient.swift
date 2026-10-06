@@ -147,7 +147,8 @@ public struct ProjectsClient: Sendable {
         var options: [String: String] = [:]
         let nodes = ((project["fields"] as? [String: Any])?["nodes"] as? [[String: Any]]) ?? []
         for node in nodes {
-            switch node["name"] as? String {
+            let fieldName = node["name"] as? String
+            switch fieldName {
             case "Status":
                 statusFieldId = node["id"] as? String
                 for opt in (node["options"] as? [[String: Any]]) ?? [] {
@@ -155,10 +156,10 @@ public struct ProjectsClient: Sendable {
                         options[name] = id
                     }
                 }
-            case "Due", "Date":
-                dueFieldId = node["id"] as? String
             default:
-                break
+                if isProjectsDueFieldName(fieldName) {
+                    dueFieldId = node["id"] as? String
+                }
             }
         }
         return ProjectFieldMeta(
@@ -367,7 +368,7 @@ public struct ProjectsClient: Sendable {
             for field in fields {
                 let fieldName = (field["field"] as? [String: Any])?["name"] as? String
                 if fieldName == "Status", let name = field["name"] as? String { status = name }
-                if fieldName == "Due" || fieldName == "Date", let date = field["date"] as? String { due = date }
+                if isProjectsDueFieldName(fieldName), let date = field["date"] as? String { due = date }
             }
             return TaskCard(
                 id: id,

@@ -36,7 +36,7 @@ CREWRP_E2E_TOKEN=… CREWRP_E2E_REPO=owner/repo ../scripts/e2e-crud.sh
 - 포인트 색은 틸이고, 배경은 시스템 grouped 색을 따른다. 앱 아이콘은 `CrewRPApp/Assets.xcassets`의 틸 배경·세 명 실루엣이다.
 - 소통에서 입력 중 칸 밖(메시지 목록)을 누르면 포커스를 해제하고 키보드를 닫아 탭이 다시 보인다.
 - 할 일은 칸반(접수·진행 중·완료)과 마감일 목록을 전환한다. compact(폰) 칸반은 레인별 세로 섹션(전체 너비)이고, 와이드는 다열을 유지한다. 홈은 오늘 할 일, 고정 공지, 다가오는 할 일이다.
-- 할 일 상세는 상태(세그먼트)와 납기(YYYY-MM-DD)를 보여 주고 Projects v2 Status·Due에 저장한다. `updateTask`는 Due를 보낸다.
+- 할 일 상세는 상태(세그먼트)와 납기(YYYY-MM-DD)를 보여 주고 Projects v2 Status·날짜 필드(`Due` / `Date` / `Due date`)에 저장한다. `updateTask`는 Due를 보낸다.
 - 불러오기 실패는 다시 시도를 보여 준다. Discord 식별자가 비어 있으면 바로 대화 버튼을 숨긴다.
 - 공지·할 일·자료실·소통은 앱에서 CRUD한다. 탭의 `+`로 작성, 항목으로 상세·수정·삭제. 운영진은 전 항목, 멤버는 본인 작성분만 수정·삭제.
 - OAuth scope는 `read:org repo project`. Projects v2 쓰기는 `project`가 필요하므로 스코프 변경 후에는 재로그인한다.

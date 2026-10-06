@@ -34,6 +34,13 @@ public func dueOnInput(_ iso: String?) -> String {
     return String(iso.prefix(10))
 }
 
+/// GitHub Projects v2 날짜 필드 표시 이름 (기본값은 "Due date").
+public func isProjectsDueFieldName(_ name: String?) -> Bool {
+    guard let name else { return false }
+    let n = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return n == "due" || n == "date" || n == "due date"
+}
+
 public extension TeamRole {
     var label: String { self == .admin ? "운영진" : "멤버" }
 }

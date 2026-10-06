@@ -532,6 +532,31 @@ class ShellPresentationTest {
     }
 
     @Test
+    fun loadFieldMetaAndListTasksRecognizeGitHubDueDateField() {
+        val metaPayload = """
+            {"data":{"user":{"projectV2":{"id":"P1","fields":{"nodes":[
+              {"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]},
+              {"id":"D1","name":"Due date"}
+            ]}}}}}
+        """.trimIndent()
+        val meta = ProjectsClient(HttpTransport { _, _, _, _ -> HttpResult(200, metaPayload) })
+            .loadFieldMeta("yoosungung", 1, "tok")
+        assertEquals("D1", meta!!.dueFieldId)
+
+        val listPayload = """
+            {"data":{"user":{"projectV2":{"items":{"nodes":[
+              {"id":"t1","content":{"title":"보고서"},"fieldValues":{"nodes":[
+                {"name":"접수","field":{"name":"Status"}},
+                {"date":"2026-10-07","field":{"name":"Due date"}}
+              ]}}
+            ]}}}}}
+        """.trimIndent()
+        val cards = ProjectsClient(HttpTransport { _, _, _, _ -> HttpResult(200, listPayload) })
+            .listTasks("yoosungung", 1, "tok")
+        assertEquals("2026-10-07", cards.single().dueOn)
+    }
+
+    @Test
     fun loadFieldMetaToleratesOrganizationNotFoundForUserLogin() {
         val payload = """
             {"data":{"organization":null,"user":{"projectV2":{"id":"P1","fields":{"nodes":[

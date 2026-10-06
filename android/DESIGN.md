@@ -42,7 +42,7 @@ adb -d shell am start -n app.crewrp/.MainActivity
 - 테마는 `ui/Theme.kt`. 밝은 화면은 종이색 배경과 틸 포인트, 어두운 화면은 같은 색의 어두운 쌍.
 - 화면은 `ui/Shell.kt`. 로그인, 크루 시작, 하단 4탭.
 - 할 일은 칸반(접수·진행 중·완료)과 마감일 목록을 전환한다. compact(폰, 너비 < 600dp) 칸반은 레인별 세로 섹션(전체 너비)이고, 와이드는 다열을 유지한다. 홈은 오늘 할 일, 고정 공지, 다가오는 할 일이다.
-- 할 일 상세는 상태(세그먼트)와 납기(YYYY-MM-DD)를 보여 주고 Projects v2 Status·Due에 저장한다.
+- 할 일 상세는 상태(세그먼트)와 납기(YYYY-MM-DD)를 보여 주고 Projects v2 Status·날짜 필드(`Due` / `Date` / `Due date`)에 저장한다.
 - 불러오기 실패는 원인 원문 대신 다시 시도를 보여 준다. Discord 식별자가 비어 있으면 바로 대화 버튼을 숨긴다.
 - OAuth PKCE `state`/`code_verifier`는 EncryptedSharedPreferences에 둔다. 브라우저에서 돌아올 때 Activity가 다시 만들어져도 교환이 된다. 토큰 교환은 백그라운드 스레드에서 한다.
 - 공지·할 일·자료실·소통은 앱에서 CRUD한다. 탭의 `+`로 작성, 항목 탭으로 상세·수정·삭제. 운영진은 전 항목, 멤버는 본인 작성분만 수정·삭제.

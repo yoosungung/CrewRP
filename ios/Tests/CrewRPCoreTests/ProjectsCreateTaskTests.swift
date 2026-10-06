@@ -42,6 +42,30 @@ struct ProjectsCreateTaskTests {
         #expect(closed.value)
     }
 
+    @Test("loadFieldMeta and listTasks recognize GitHub Due date field")
+    func dueDateFieldName() async throws {
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            let body = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
+            if body.contains("fields(first") {
+                return (
+                    Data(#"{"data":{"user":{"projectV2":{"id":"P1","fields":{"nodes":[{"id":"S1","name":"Status","options":[{"id":"o1","name":"접수"}]},{"id":"D1","name":"Due date"}]}}}}}"#.utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                )
+            }
+            return (
+                Data(#"{"data":{"user":{"projectV2":{"items":{"nodes":[{"id":"t1","content":{"title":"보고서"},"fieldValues":{"nodes":[{"name":"접수","field":{"name":"Status"}},{"date":"2026-10-07","field":{"name":"Due date"}}]}}]}}}}}"#.utf8),
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            )
+        }
+        let client = ProjectsClient(transport: transport)
+        let meta = try await client.loadFieldMeta(owner: "yoosungung", projectNumber: 1, token: "tok")
+        #expect(meta?.dueFieldId == "D1")
+        let cards = try await client.listTasks(org: "yoosungung", projectNumber: 1, token: "tok")
+        #expect(cards.count == 1)
+        #expect(cards.first?.dueOn == "2026-10-07")
+    }
+
     @Test("resolveProjectNumber falls back to listed project")
     func resolveFallsBack() async throws {
         let transport = MockHTTPTransport()
