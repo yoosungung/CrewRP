@@ -62,6 +62,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setText
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -375,7 +378,20 @@ private fun TaskEditDialog(
                         ) { Text(lane.title) }
                     }
                 }
-                OutlinedTextField(due, { due = it }, label = { Text("납기 (YYYY-MM-DD)") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    due,
+                    { due = it },
+                    label = { Text("납기 (YYYY-MM-DD)") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("taskDue")
+                        .semantics {
+                            setText {
+                                due = it.text
+                                true
+                            }
+                        },
+                )
             }
         },
         confirmButton = {

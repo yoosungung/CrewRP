@@ -253,20 +253,27 @@ final class AppModel: ObservableObject {
 
     func updateTask(_ card: TaskCard, status: String, dueOn: String?) async {
         guard let meta = projectMeta else { return }
-        let opt = meta.statusOptions.first { key, _ in
-            key == status || taskLane(status: key) == taskLane(status: status)
-        }?.value
         let due = dueOn.flatMap { value in
             let trimmed = dueOnInput(value)
             return trimmed.isEmpty ? nil : trimmed
         }
-        await withToken { token, _, _ in
-            try await ProjectsClient(transport: transport).updateTaskFields(
-                projectId: meta.projectId,
+        await withToken { token, owner, _ in
+            let projects = ProjectsClient(transport: transport)
+            let number = try await projects.resolveProjectNumber(
+                owner: session?.org ?? owner, preferred: projectNumber, token: token
+            )
+            let ready = try await projects.ensureDueDateField(
+                meta: meta, owner: session?.org ?? owner, projectNumber: number, token: token
+            )
+            let opt = ready.statusOptions.first { key, _ in
+                key == status || taskLane(status: key) == taskLane(status: status)
+            }?.value
+            try await projects.updateTaskFields(
+                projectId: ready.projectId,
                 itemId: card.id,
-                statusFieldId: meta.statusFieldId,
+                statusFieldId: ready.statusFieldId,
                 statusOptionId: opt,
-                dueFieldId: meta.dueFieldId,
+                dueFieldId: ready.dueFieldId,
                 dueOn: due,
                 token: token
             )
