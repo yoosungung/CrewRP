@@ -44,4 +44,5 @@ CREWRP_E2E_TOKEN=… CREWRP_E2E_REPO=owner/repo ../scripts/e2e-crud.sh
 - 홈·크루 시작 화면 상단에 **로그아웃**이 있다. 토큰·대기 OAuth·세션을 지우고 로그인 화면으로 돌아간다.
 - 로그인은 외부 Safari(`UIApplication.open`) + `crewrp://` 콜백이다. PKCE pending은 UserDefaults. 액세스 토큰은 Keychain 우선, entitlement 없으면 UserDefaults 폴백(폴백이 있으면 Keychain보다 우선). HTTP는 ephemeral URLSession.
 - `CacheStore`(SQLite)는 락 + FULLMUTEX로 직렬화하고, 손상 시 파일을 지우고 다시 연다. ETag 캐시 쓰기는 best-effort라 캐시 실패로 자료실 로드가 깨지지 않는다.
+- `refreshHomeData`는 네트워크·JSON 디코드를 `Task.detached`에서 돌리고 섹션을 `async let`으로 병렬화한다. GraphQL 목록(`listTasks`/`listNotices`)은 `GraphQLFreshness`(TTL 60s, `graphql_cursor`+`cache_entry`)로 신선하면 네트워크를 생략한다. 당겨서 새로고침·쓰기 후 갱신은 `forceNetwork: true`.
 - 모든 쓰기는 async로 하고, 실패 시 “저장하지 못했습니다”류(스코프 부족이면 재로그인 안내)만 보여 준다.

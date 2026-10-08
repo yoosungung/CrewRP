@@ -130,73 +130,162 @@ final class AppModel: ObservableObject {
         didRegisterPush = false
     }
 
-    func refreshHomeData() async {
+    func refreshHomeData(forceNetwork: Bool = false) async {
         guard let session, let token = try? tokens.loadAccessToken(), let parts = repoParts else { return }
         let owner = parts.owner
         let repo = parts.repo
+        let org = session.org
+        let preferredProject = projectNumber
+        let fallbackDocPath = docPath
+        let transport = self.transport
+        let cache = self.cache
         isLoading = true
         defer { isLoading = false }
 
-        currentLogin = try? await GitHubMembershipClient(transport: transport).currentUser(token: token).login
-
-        do {
-            let projects = ProjectsClient(transport: transport)
-            let number = (try? await projects.resolveProjectNumber(
-                owner: session.org, preferred: projectNumber, token: token
-            )) ?? projectNumber
-            tasks = try await projects.sortedByDueDate(
-                projects.listTasks(org: session.org, projectNumber: number, token: token)
-            )
-            projectMeta = try? await projects.loadFieldMeta(owner: session.org, projectNumber: number, token: token)
-            tasksFailed = false
-        } catch {
-            tasksFailed = true
+        // Network + JSON decode off the main actor so UI scroll stays responsive (A).
+        // Sections run in parallel to cut the REST/GraphQL waterfall (B).
+        struct Snapshot: Sendable {
+            var login: String?
+            var tasks: [TaskCard] = []
+            var tasksFailed = false
+            var projectMeta: ProjectFieldMeta?
+            var notices: [Notice] = []
+            var noticesFailed = false
+            var discussionSetup: DiscussionSetup?
+            var docs: [DocEntry] = []
+            var docPath: String
+            var docPreview: String = ""
+            var docSha: String?
+            var docFailed = false
+            var talkIssueNumber = 1
+            var threadMessages: [ThreadMessage] = []
+            var threadsFailed = false
         }
 
-        do {
-            let discussions = DiscussionsClient(transport: transport)
-            notices = try await discussions.listNotices(owner: owner, repo: repo, token: token)
-            discussionSetup = try? await discussions.resolveSetup(owner: owner, repo: repo, token: token)
-            noticesFailed = false
-        } catch {
-            noticesFailed = true
-        }
+        let snapshot = await Task.detached(priority: .userInitiated) { () -> Snapshot in
+            async let loginTask = try? await GitHubMembershipClient(transport: transport).currentUser(token: token).login
 
-        do {
-            let docsClient = DocsClient(transport: transport, cache: cache)
-            docs = (try? await docsClient.listDocs(owner: owner, repo: repo, token: token)) ?? []
-            let path = docs.first(where: { !$0.isDir && $0.name.lowercased() == "readme.md" })?.path
-                ?? docs.first(where: { !$0.isDir })?.path
-                ?? docPath
-            do {
-                let file = try await docsClient.fetchMarkdown(owner: owner, repo: repo, path: path, token: token)
-                docPath = file.path
-                docPreview = file.content
-                docSha = file.sha
-                docFailed = false
-            } catch {
-                // Missing docs folder/file → empty 자료실; other errors → retry hint.
-                if case GitHubAPIError.httpStatus(404) = error {
-                    docPreview = ""
-                    docSha = nil
-                    docFailed = false
-                } else {
-                    log.error("docs fetch failed: \(String(describing: error), privacy: .public)")
-                    docFailed = true
+            async let tasksTask: (cards: [TaskCard], failed: Bool, meta: ProjectFieldMeta?) = {
+                do {
+                    let projects = ProjectsClient(transport: transport)
+                    let queryName = GraphQLFreshness.listTasksQueryName(org: org, projectNumber: preferredProject)
+                    let number: Int
+                    if !forceNetwork, GraphQLFreshness.freshBody(cache: cache, queryName: queryName) != nil {
+                        number = preferredProject
+                    } else {
+                        number = (try? await projects.resolveProjectNumber(
+                            owner: org, preferred: preferredProject, token: token
+                        )) ?? preferredProject
+                    }
+                    let cards = try await projects.sortedByDueDate(
+                        projects.listTasks(
+                            org: org,
+                            projectNumber: number,
+                            token: token,
+                            cache: cache,
+                            forceNetwork: forceNetwork
+                        )
+                    )
+                    let meta = try? await projects.loadFieldMeta(owner: org, projectNumber: number, token: token)
+                    return (cards, false, meta)
+                } catch {
+                    return ([], true, nil)
                 }
-            }
-        }
+            }()
 
-        do {
-            let talk = ThreadTalkClient(transport: transport)
-            talkIssueNumber = try await talk.ensureTalkIssueNumber(owner: owner, repo: repo, token: token)
-            threadMessages = try await talk.listIssueComments(
-                owner: owner, repo: repo, issueNumber: talkIssueNumber, token: token
+            async let noticesTask: (items: [Notice], failed: Bool, setup: DiscussionSetup?) = {
+                do {
+                    let discussions = DiscussionsClient(transport: transport)
+                    let items = try await discussions.listNotices(
+                        owner: owner,
+                        repo: repo,
+                        token: token,
+                        cache: cache,
+                        forceNetwork: forceNetwork
+                    )
+                    let setup = try? await discussions.resolveSetup(owner: owner, repo: repo, token: token)
+                    return (items, false, setup)
+                } catch {
+                    return ([], true, nil)
+                }
+            }()
+
+            async let docsTask: (entries: [DocEntry], path: String, preview: String, sha: String?, failed: Bool) = {
+                let docsClient = DocsClient(transport: transport, cache: cache)
+                let entries = (try? await docsClient.listDocs(owner: owner, repo: repo, token: token)) ?? []
+                let path = entries.first(where: { !$0.isDir && $0.name.lowercased() == "readme.md" })?.path
+                    ?? entries.first(where: { !$0.isDir })?.path
+                    ?? fallbackDocPath
+                do {
+                    let file = try await docsClient.fetchMarkdown(owner: owner, repo: repo, path: path, token: token)
+                    return (entries, file.path, file.content, file.sha, false)
+                } catch {
+                    if case GitHubAPIError.httpStatus(404) = error {
+                        return (entries, path, "", nil, false)
+                    }
+                    return (entries, path, "", nil, true)
+                }
+            }()
+
+            async let talkTask: (issue: Int, messages: [ThreadMessage], failed: Bool) = {
+                do {
+                    let talk = ThreadTalkClient(transport: transport)
+                    let issue = try await talk.ensureTalkIssueNumber(owner: owner, repo: repo, token: token)
+                    let messages = try await talk.listIssueComments(
+                        owner: owner, repo: repo, issueNumber: issue, token: token
+                    )
+                    return (issue, messages, false)
+                } catch {
+                    return (1, [], true)
+                }
+            }()
+
+            let tasks = await tasksTask
+            let notices = await noticesTask
+            let docs = await docsTask
+            let talk = await talkTask
+            return Snapshot(
+                login: await loginTask,
+                tasks: tasks.cards,
+                tasksFailed: tasks.failed,
+                projectMeta: tasks.meta,
+                notices: notices.items,
+                noticesFailed: notices.failed,
+                discussionSetup: notices.setup,
+                docs: docs.entries,
+                docPath: docs.path,
+                docPreview: docs.preview,
+                docSha: docs.sha,
+                docFailed: docs.failed,
+                talkIssueNumber: talk.issue,
+                threadMessages: talk.messages,
+                threadsFailed: talk.failed
             )
-            threadsFailed = false
-        } catch {
-            threadsFailed = true
+        }.value
+
+        currentLogin = snapshot.login
+        if !snapshot.tasksFailed || tasks.isEmpty {
+            tasks = snapshot.tasks
         }
+        tasksFailed = snapshot.tasksFailed
+        if let meta = snapshot.projectMeta { projectMeta = meta }
+        if !snapshot.noticesFailed || notices.isEmpty {
+            notices = snapshot.notices
+        }
+        noticesFailed = snapshot.noticesFailed
+        if let setup = snapshot.discussionSetup { discussionSetup = setup }
+        docs = snapshot.docs
+        docPath = snapshot.docPath
+        if !snapshot.docFailed || docPreview.isEmpty {
+            docPreview = snapshot.docPreview
+            docSha = snapshot.docSha
+        }
+        docFailed = snapshot.docFailed
+        if !snapshot.threadsFailed || threadMessages.isEmpty {
+            talkIssueNumber = snapshot.talkIssueNumber
+            threadMessages = snapshot.threadMessages
+        }
+        threadsFailed = snapshot.threadsFailed
 
         if !didRegisterPush {
             didRegisterPush = true
@@ -212,7 +301,7 @@ final class AppModel: ObservableObject {
         do {
             try await work(token, parts.owner, parts.repo)
             writeError = nil
-            await refreshHomeData()
+            await refreshHomeData(forceNetwork: true)
         } catch {
             log.error("write failed: \(String(describing: error), privacy: .public)")
             writeError = writeFailureMessage(String(describing: error))
@@ -479,7 +568,7 @@ private struct HomeTab: View {
                 if model.isLoading && model.tasks.isEmpty && model.notices.isEmpty {
                     ProgressView()
                 } else if homeQuiet && (model.tasksFailed || model.noticesFailed) {
-                    FailedHint { await model.refreshHomeData() }
+                    FailedHint { await model.refreshHomeData(forceNetwork: true) }
                 } else if homeQuiet {
                     EmptyHint(title: "아직 소식이 없습니다", message: "+ 로 공지를 작성하세요.")
                 } else {
@@ -529,7 +618,7 @@ private struct HomeTab: View {
                     Button { composing = true } label: { Image(systemName: "plus") }
                 }
             }
-            .refreshable { await model.refreshHomeData() }
+            .refreshable { await model.refreshHomeData(forceNetwork: true) }
             .sheet(isPresented: $composing) {
                 ComposeSheet(title: "공지 작성", titleLabel: "제목", bodyLabel: "본문") { t, b in
                     Task { await model.createNotice(title: t, body: b) }
@@ -571,7 +660,7 @@ private struct TasksTab: View {
                 if model.isLoading && model.tasks.isEmpty && !model.tasksFailed {
                     ProgressView()
                 } else if model.tasksFailed && model.tasks.isEmpty {
-                    FailedHint { await model.refreshHomeData() }
+                    FailedHint { await model.refreshHomeData(forceNetwork: true) }
                 } else if model.tasks.isEmpty {
                     EmptyHint(title: "아직 할 일이 없습니다", message: "+ 로 새 할 일을 추가하세요.")
                 } else {
@@ -604,7 +693,7 @@ private struct TasksTab: View {
                     Button { composing = true } label: { Image(systemName: "plus") }
                 }
             }
-            .refreshable { await model.refreshHomeData() }
+            .refreshable { await model.refreshHomeData(forceNetwork: true) }
             .sheet(isPresented: $composing) {
                 ComposeSheet(title: "할 일 추가", titleLabel: "제목", bodyLabel: "마감 (YYYY-MM-DD)", initialBody: "") { t, due in
                     Task { await model.createTask(title: t, dueOn: due.isEmpty ? nil : due) }
@@ -748,7 +837,7 @@ private struct DocsTab: View {
                 if model.isLoading && model.docPreview.isEmpty && !model.docFailed {
                     ProgressView()
                 } else if model.docFailed && model.docPreview.isEmpty {
-                    FailedHint { await model.refreshHomeData() }
+                    FailedHint { await model.refreshHomeData(forceNetwork: true) }
                 } else if editing {
                     TextEditor(text: $draft).padding()
                 } else if docBlocks(model.docPreview).isEmpty {
@@ -801,7 +890,7 @@ private struct DocsTab: View {
                     }
                 }
             }
-            .refreshable { await model.refreshHomeData() }
+            .refreshable { await model.refreshHomeData(forceNetwork: true) }
             .sheet(isPresented: $composing) {
                 ComposeSheet(title: "자료 저장", titleLabel: "경로 (docs/…)", bodyLabel: "내용", initialTitle: "docs/notes.md") { path, body in
                     Task { await model.saveDoc(path: path, content: body) }
@@ -838,7 +927,7 @@ private struct TalkTab: View {
                     if model.isLoading && model.threadMessages.isEmpty && !model.threadsFailed {
                         ProgressView()
                     } else if model.threadsFailed && model.threadMessages.isEmpty {
-                        FailedHint { await model.refreshHomeData() }
+                        FailedHint { await model.refreshHomeData(forceNetwork: true) }
                     } else if model.threadMessages.isEmpty {
                         EmptyHint(title: "스레드 톡이 없습니다", message: "아래에 메시지를 남겨 보세요.")
                     } else {
@@ -906,7 +995,7 @@ private struct TalkTab: View {
                     Button("완료") { dismissComposer() }
                 }
             }
-            .refreshable { await model.refreshHomeData() }
+            .refreshable { await model.refreshHomeData(forceNetwork: true) }
             .sheet(item: $editing) { message in
                 ComposeSheet(
                     title: "메시지 수정",
@@ -1016,7 +1105,7 @@ private struct RefreshButton: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Button {
-                Task { await model.refreshHomeData() }
+                Task { await model.refreshHomeData(forceNetwork: true) }
             } label: {
                 Image(systemName: "arrow.clockwise")
             }

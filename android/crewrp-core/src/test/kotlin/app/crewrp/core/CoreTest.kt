@@ -90,6 +90,47 @@ class CacheStoreTest {
     }
 }
 
+class ETagRESTClientTest {
+    @Test
+    fun persistsResponseEtag() {
+        JdbcCacheStore(":memory:").use { cache ->
+            val transport = HttpTransport { _, _, _, _ ->
+                HttpResult(
+                    200,
+                    """{"path":"docs/a.md","content":"","encoding":"base64"}""",
+                    mapOf("ETag" to "\"fresh\""),
+                )
+            }
+            ETagRESTClient(transport, cache).get("https://api.github.com/repos/o/r/contents/docs/a.md", "t")
+            assertEquals("\"fresh\"", cache.cacheEntry("https://api.github.com/repos/o/r/contents/docs/a.md")?.etag)
+        }
+    }
+}
+
+class GraphQLFreshnessTest {
+    @Test
+    fun skipsNetworkWhenCursorFresh() {
+        JdbcCacheStore(":memory:").use { cache ->
+            val now = Instant.ofEpochSecond(1_000)
+            GraphQLFreshness.store(
+                cache,
+                GraphQLFreshness.listNoticesQueryName("o", "r"),
+                """[{"id":"D1","title":"t","body":"b","authorLogin":"ada"}]""",
+                now,
+            )
+            var hits = 0
+            val notices = DiscussionsClient(
+                HttpTransport { _, _, _, _ ->
+                    hits += 1
+                    error("network should not run")
+                },
+            ).listNotices("o", "r", "t", cache, forceNetwork = false, now = now.plusSeconds(30))
+            assertEquals(0, hits)
+            assertEquals(listOf("D1"), notices.map { it.id })
+        }
+    }
+}
+
 class TokenStoreTest {
     @Test
     fun memoryRoundTrip() {

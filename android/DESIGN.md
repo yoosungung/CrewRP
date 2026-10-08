@@ -51,3 +51,4 @@ adb -d shell am start -n app.crewrp/.MainActivity
 - JVM `HttpURLConnection`은 PATCH를 거부하므로 `UrlHttpTransport`는 POST + `X-HTTP-Method-Override: PATCH`로 보낸다(댓글·이슈 상태·자료 갱신).
 - 홈(TopAppBar)·크루 시작 화면에 **로그아웃**이 있다. 토큰·대기 OAuth·세션을 지우고 로그인 화면으로 돌아간다.
 - 모든 쓰기(등록·저장·삭제·댓글)는 백그라운드 스레드에서 하고, 실패 시 원인 원문 대신 “저장하지 못했습니다”류(스코프 부족이면 재로그인 안내)만 보여 준다.
+- `fetchCrewContent`는 할 일·공지·톡·자료를 스레드 풀로 병렬 로드한다. GraphQL 목록은 `GraphQLFreshness`(TTL 60s)로 신선하면 네트워크를 생략하고, REST `ETagRESTClient`는 응답 `ETag`를 저장해 이후 `If-None-Match`/`304`를 쓴다. 당겨서 새로고침(`refreshTick > 0`)은 `forceNetwork`.

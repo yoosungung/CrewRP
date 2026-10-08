@@ -1,6 +1,6 @@
 import Foundation
 
-public struct TaskCard: Sendable, Equatable, Identifiable {
+public struct TaskCard: Sendable, Equatable, Identifiable, Codable {
     public let id: String
     public let title: String
     public let status: String
@@ -41,11 +41,28 @@ public struct ProjectsClient: Sendable {
         self.apiBase = apiBase
     }
 
-    public func listTasks(org: String, projectNumber: Int, token: String) async throws -> [TaskCard] {
-        if let cards = try await queryItems(kind: "organization", login: org, projectNumber: projectNumber, token: token) {
-            return cards
+    public func listTasks(
+        org: String,
+        projectNumber: Int,
+        token: String,
+        cache: CacheStore? = nil,
+        forceNetwork: Bool = false,
+        now: Date = Date()
+    ) async throws -> [TaskCard] {
+        let queryName = GraphQLFreshness.listTasksQueryName(org: org, projectNumber: projectNumber)
+        if !forceNetwork, let cache, let cached = GraphQLFreshness.freshBody(cache: cache, queryName: queryName, now: now) {
+            return try JSONDecoder().decode([TaskCard].self, from: cached)
         }
-        return try await queryItems(kind: "user", login: org, projectNumber: projectNumber, token: token) ?? []
+        let cards: [TaskCard]
+        if let orgCards = try await queryItems(kind: "organization", login: org, projectNumber: projectNumber, token: token) {
+            cards = orgCards
+        } else {
+            cards = try await queryItems(kind: "user", login: org, projectNumber: projectNumber, token: token) ?? []
+        }
+        if let cache, let encoded = try? JSONEncoder().encode(cards) {
+            GraphQLFreshness.store(cache: cache, queryName: queryName, body: encoded, now: now)
+        }
+        return cards
     }
 
     public func sortedByDueDate(_ cards: [TaskCard]) -> [TaskCard] {

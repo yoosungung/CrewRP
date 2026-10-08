@@ -349,6 +349,103 @@ struct ETagRESTClientTests {
         #expect(result.fromCache)
         #expect(String(data: result.body, encoding: .utf8) == #"{"ok":1}"#)
     }
+
+    @Test("persists response ETag for later If-None-Match")
+    func storesEtag() async throws {
+        let cache = try CacheStore(path: ":memory:")
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["ETag": "\"fresh\""]
+            )!
+            return (Data(#"{"path":"docs/a.md","content":"","encoding":"base64"}"#.utf8), response)
+        }
+        let client = ETagRESTClient(transport: transport, cache: cache)
+        _ = try await client.get(url: URL(string: "https://api.github.com/repos/o/r/contents/docs/a.md")!, token: "t")
+        #expect(try cache.cacheEntry(url: "https://api.github.com/repos/o/r/contents/docs/a.md")?.etag == "\"fresh\"")
+    }
+}
+
+@Suite("GraphQLFreshness")
+struct GraphQLFreshnessTests {
+    @Test("skips network when cursor is fresh")
+    func skipsNetworkWhenFresh() async throws {
+        let cache = try CacheStore(path: ":memory:")
+        let payload = [Notice(id: "D1", title: "t", body: "b", authorLogin: "ada")]
+        let body = try JSONEncoder().encode(payload)
+        let now = Date(timeIntervalSince1970: 1_000)
+        GraphQLFreshness.store(
+            cache: cache,
+            queryName: GraphQLFreshness.listNoticesQueryName(owner: "o", repo: "r"),
+            body: body,
+            now: now
+        )
+        final class HitCounter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func increment() {
+                lock.lock()
+                value += 1
+                lock.unlock()
+            }
+            var count: Int {
+                lock.lock()
+                defer { lock.unlock() }
+                return value
+            }
+        }
+        let hits = HitCounter()
+        let transport = MockHTTPTransport()
+        transport.handler = { _ in
+            hits.increment()
+            fatalError("network should not run")
+        }
+        let notices = try await DiscussionsClient(transport: transport).listNotices(
+            owner: "o",
+            repo: "r",
+            token: "t",
+            cache: cache,
+            forceNetwork: false,
+            now: now.addingTimeInterval(30)
+        )
+        #expect(hits.count == 0)
+        #expect(notices.map(\.id) == ["D1"])
+    }
+
+    @Test("forceNetwork bypasses freshness")
+    func forceNetworkBypasses() async throws {
+        let cache = try CacheStore(path: ":memory:")
+        let stale = [Notice(id: "OLD", title: "old", body: "", authorLogin: nil)]
+        GraphQLFreshness.store(
+            cache: cache,
+            queryName: GraphQLFreshness.listNoticesQueryName(owner: "o", repo: "r"),
+            body: try JSONEncoder().encode(stale),
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+        let transport = MockHTTPTransport()
+        transport.handler = { _ in
+            let json = #"{"data":{"repository":{"discussions":{"nodes":[{"id":"NEW","title":"n","body":"","author":{"login":"x"}}]}}}}"#
+            let response = HTTPURLResponse(
+                url: URL(string: "https://api.github.com/graphql")!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (Data(json.utf8), response)
+        }
+        let notices = try await DiscussionsClient(transport: transport).listNotices(
+            owner: "o",
+            repo: "r",
+            token: "t",
+            cache: cache,
+            forceNetwork: true,
+            now: Date(timeIntervalSince1970: 1_030)
+        )
+        #expect(notices.map(\.id) == ["NEW"])
+    }
 }
 
 @Suite("CacheStore concurrency")
