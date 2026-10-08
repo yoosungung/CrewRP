@@ -7,6 +7,7 @@ import app.crewrp.core.DocEntry
 import app.crewrp.core.DocFile
 import app.crewrp.core.DocsClient
 import app.crewrp.core.GitHubMembershipClient
+import app.crewrp.core.GraphQLFreshness
 import app.crewrp.core.Notice
 import app.crewrp.core.ProjectFieldMeta
 import app.crewrp.core.ProjectsClient
@@ -16,6 +17,9 @@ import app.crewrp.core.ThreadMessage
 import app.crewrp.core.ThreadTalkClient
 import app.crewrp.core.UrlHttpTransport
 import app.crewrp.core.taskLane
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 data class CrewContent(
     val tasks: List<TaskCard> = emptyList(),
@@ -41,7 +45,13 @@ private fun parts(session: Session): Pair<String, String>? {
     return if (p.size == 2) p[0] to p[1] else null
 }
 
-fun fetchCrewContent(session: Session, token: String, cache: CacheStore, projectNumber: Int): CrewContent {
+fun fetchCrewContent(
+    session: Session,
+    token: String,
+    cache: CacheStore,
+    projectNumber: Int,
+    forceNetwork: Boolean = false,
+): CrewContent {
     val (owner, repo) = parts(session) ?: return CrewContent(
         tasksFailed = true,
         noticesFailed = true,
@@ -49,40 +59,99 @@ fun fetchCrewContent(session: Session, token: String, cache: CacheStore, project
         docFailed = true,
     )
     val transport = UrlHttpTransport()
-    val login = runCatching { GitHubMembershipClient(transport).currentUser(token).login }.getOrNull()
-    val projects = ProjectsClient(transport)
-    val number = runCatching { projects.resolveProjectNumber(session.org, projectNumber, token) }
-        .getOrDefault(projectNumber)
-    val tasks = runCatching { projects.sortedByDueDate(projects.listTasks(session.org, number, token)) }
-    val meta = runCatching { projects.loadFieldMeta(session.org, number, token) }
-    val discussions = DiscussionsClient(transport)
-    val notices = runCatching { discussions.listNotices(owner, repo, token) }
-    val setup = runCatching { discussions.resolveSetup(owner, repo, token) }
-    val talkClient = ThreadTalkClient(transport)
-    val talkIssue = runCatching { talkClient.ensureTalkIssueNumber(owner, repo, token) }
-    val threads = talkIssue.mapCatching { n -> talkClient.listIssueComments(owner, repo, n, token) }
-    val docsClient = DocsClient(transport, cache)
-    val docs = runCatching { docsClient.listDocs(owner, repo, token) }
-    val docPath = docs.getOrNull()?.firstOrNull { !it.isDir && it.name.equals("README.md", true) }?.path
-        ?: "docs/README.md"
-    val doc = runCatching { docsClient.fetchMarkdown(owner, repo, docPath, token) }
-    return CrewContent(
-        tasks = tasks.getOrDefault(emptyList()),
-        tasksFailed = tasks.isFailure,
-        notices = notices.getOrDefault(emptyList()),
-        noticesFailed = notices.isFailure,
-        threads = threads.getOrDefault(emptyList()),
-        threadsFailed = threads.isFailure,
-        docs = docs.getOrDefault(emptyList()),
-        docPath = docPath,
-        doc = doc.getOrNull()?.content.orEmpty(),
-        docSha = doc.getOrNull()?.sha,
-        docFailed = doc.isFailure,
-        projectMeta = meta.getOrNull(),
-        discussionSetup = setup.getOrNull(),
-        currentLogin = login,
-    )
+    val pool = Executors.newFixedThreadPool(4)
+    try {
+        val loginF: Future<String?> = pool.submit(
+            Callable {
+                runCatching { GitHubMembershipClient(transport).currentUser(token).login }.getOrNull()
+            },
+        )
+        val tasksF: Future<Triple<List<TaskCard>, Boolean, ProjectFieldMeta?>> = pool.submit(
+            Callable {
+                val projects = ProjectsClient(transport)
+                val queryName = GraphQLFreshness.listTasksQueryName(session.org, projectNumber)
+                val number = if (!forceNetwork && GraphQLFreshness.freshBody(cache, queryName) != null) {
+                    projectNumber
+                } else {
+                    runCatching { projects.resolveProjectNumber(session.org, projectNumber, token) }
+                        .getOrDefault(projectNumber)
+                }
+                val tasks = runCatching {
+                    projects.sortedByDueDate(
+                        projects.listTasks(session.org, number, token, cache, forceNetwork),
+                    )
+                }
+                val meta = runCatching { projects.loadFieldMeta(session.org, number, token) }
+                Triple(tasks.getOrDefault(emptyList()), tasks.isFailure, meta.getOrNull())
+            },
+        )
+        val noticesF: Future<Triple<List<Notice>, Boolean, DiscussionSetup?>> = pool.submit(
+            Callable {
+                val discussions = DiscussionsClient(transport)
+                val notices = runCatching {
+                    discussions.listNotices(owner, repo, token, cache, forceNetwork)
+                }
+                val setup = runCatching { discussions.resolveSetup(owner, repo, token) }
+                Triple(notices.getOrDefault(emptyList()), notices.isFailure, setup.getOrNull())
+            },
+        )
+        val talkF: Future<Pair<List<ThreadMessage>, Boolean>> = pool.submit(
+            Callable {
+                val talkClient = ThreadTalkClient(transport)
+                val talkIssue = runCatching { talkClient.ensureTalkIssueNumber(owner, repo, token) }
+                val threads = talkIssue.mapCatching { n -> talkClient.listIssueComments(owner, repo, n, token) }
+                threads.getOrDefault(emptyList()) to threads.isFailure
+            },
+        )
+        val docsF: Future<DocsBundle> = pool.submit(
+            Callable {
+                val docsClient = DocsClient(transport, cache)
+                val docs = runCatching { docsClient.listDocs(owner, repo, token) }
+                val docPath = docs.getOrNull()?.firstOrNull { !it.isDir && it.name.equals("README.md", true) }?.path
+                    ?: "docs/README.md"
+                val doc = runCatching { docsClient.fetchMarkdown(owner, repo, docPath, token) }
+                DocsBundle(
+                    docs.getOrDefault(emptyList()),
+                    docPath,
+                    doc.getOrNull()?.content.orEmpty(),
+                    doc.getOrNull()?.sha,
+                    doc.isFailure,
+                )
+            },
+        )
+
+        val tasks = tasksF.get()
+        val notices = noticesF.get()
+        val talk = talkF.get()
+        val docs = docsF.get()
+        return CrewContent(
+            tasks = tasks.first,
+            tasksFailed = tasks.second,
+            notices = notices.first,
+            noticesFailed = notices.second,
+            threads = talk.first,
+            threadsFailed = talk.second,
+            docs = docs.entries,
+            docPath = docs.path,
+            doc = docs.content,
+            docSha = docs.sha,
+            docFailed = docs.failed,
+            projectMeta = tasks.third,
+            discussionSetup = notices.third,
+            currentLogin = loginF.get(),
+        )
+    } finally {
+        pool.shutdownNow()
+    }
 }
+
+private data class DocsBundle(
+    val entries: List<DocEntry>,
+    val path: String,
+    val content: String,
+    val sha: String?,
+    val failed: Boolean,
+)
 
 class CrewWriter(
     private val session: Session,

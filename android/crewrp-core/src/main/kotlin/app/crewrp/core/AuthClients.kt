@@ -10,7 +10,14 @@ fun interface HttpTransport {
     fun exchange(method: String, url: String, headers: Map<String, String>, body: String?): HttpResult
 }
 
-data class HttpResult(val status: Int, val body: String)
+data class HttpResult(
+    val status: Int,
+    val body: String,
+    val headers: Map<String, String> = emptyMap(),
+) {
+    fun header(name: String): String? =
+        headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+}
 
 class UrlHttpTransport : HttpTransport {
     override fun exchange(method: String, url: String, headers: Map<String, String>, body: String?): HttpResult {
@@ -32,7 +39,12 @@ class UrlHttpTransport : HttpTransport {
         val status = connection.responseCode
         val stream = if (status in 200..299) connection.inputStream else connection.errorStream
         val text = stream?.bufferedReader()?.readText().orEmpty()
-        return HttpResult(status, text)
+        val responseHeaders = buildMap {
+            connection.headerFields?.forEach { (key, values) ->
+                if (key != null) put(key, values?.firstOrNull().orEmpty())
+            }
+        }
+        return HttpResult(status, text, responseHeaders)
     }
 }
 

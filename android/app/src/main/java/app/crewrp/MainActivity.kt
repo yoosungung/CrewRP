@@ -139,6 +139,7 @@ class MainActivity : ComponentActivity() {
                         token,
                         cache,
                         BuildConfig.PROJECT_NUMBER.toIntOrNull() ?: 1,
+                        forceNetwork = refreshTick > 0,
                     )
                     runOnUiThread {
                         if (request != loadId) return@runOnUiThread

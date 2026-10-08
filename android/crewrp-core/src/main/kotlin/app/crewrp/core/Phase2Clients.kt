@@ -1,7 +1,9 @@
 package app.crewrp.core
 
+import java.time.Instant
 import java.util.Base64
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -39,8 +41,9 @@ class ETagRESTClient(
             return CachedHTTPResponse(304, cached.body, cached.etag, true)
         }
         require(result.status in 200..299) { "github http ${result.status}" }
-        runCatching { cache.putCacheEntry(url, result.body, null) }
-        return CachedHTTPResponse(result.status, result.body, null, false)
+        val etag = result.header("ETag") ?: result.header("Etag")
+        runCatching { cache.putCacheEntry(url, result.body, etag) }
+        return CachedHTTPResponse(result.status, result.body, etag, false)
     }
 }
 
@@ -65,10 +68,14 @@ class DocsClient(
     )
 
     fun listDocs(owner: String, repo: String, token: String, path: String = "docs"): List<DocEntry> {
-        val result = transport.rest("GET", "$apiBase/repos/$owner/$repo/contents/$path", token)
-        if (result.status == 404) return emptyList()
-        require(result.status in 200..299) { "github http ${result.status}" }
-        val el = json.parseToJsonElement(result.body)
+        val response = try {
+            rest.get("$apiBase/repos/$owner/$repo/contents/$path", token)
+        } catch (e: IllegalArgumentException) {
+            if (e.message?.contains("404") == true) return emptyList()
+            throw e
+        }
+        if (response.statusCode == 404) return emptyList()
+        val el = json.parseToJsonElement(response.body)
         if (el !is kotlinx.serialization.json.JsonArray) return emptyList()
         return el.mapNotNull { node ->
             if (node !is JsonObject) return@mapNotNull null
@@ -121,6 +128,7 @@ internal fun isProjectsDueFieldName(name: String?): Boolean {
         n.equals("Due date", ignoreCase = true)
 }
 
+@Serializable
 data class TaskCard(
     val id: String,
     val title: String,
@@ -207,10 +215,32 @@ class ProjectsClient(
             ?: error("missing project number")
     }
 
-    fun listTasks(owner: String, projectNumber: Int, token: String): List<TaskCard> {
-        val orgCards = queryProjectItems("organization", owner, projectNumber, token)
-        if (orgCards != null) return orgCards
-        return queryProjectItems("user", owner, projectNumber, token) ?: emptyList()
+    fun listTasks(
+        owner: String,
+        projectNumber: Int,
+        token: String,
+        cache: CacheStore? = null,
+        forceNetwork: Boolean = false,
+        now: Instant = Instant.now(),
+    ): List<TaskCard> {
+        val queryName = GraphQLFreshness.listTasksQueryName(owner, projectNumber)
+        if (!forceNetwork && cache != null) {
+            GraphQLFreshness.freshBody(cache, queryName, now)?.let { body ->
+                return json.decodeFromString(ListSerializer(TaskCard.serializer()), body)
+            }
+        }
+        val cards = queryProjectItems("organization", owner, projectNumber, token)
+            ?: queryProjectItems("user", owner, projectNumber, token)
+            ?: emptyList()
+        if (cache != null) {
+            GraphQLFreshness.store(
+                cache,
+                queryName,
+                json.encodeToString(ListSerializer(TaskCard.serializer()), cards),
+                now,
+            )
+        }
+        return cards
     }
 
     fun loadFieldMeta(owner: String, projectNumber: Int, token: String): ProjectFieldMeta? {
@@ -519,6 +549,7 @@ class ProjectsClient(
     }
 }
 
+@Serializable
 data class Notice(val id: String, val title: String, val body: String, val authorLogin: String? = null)
 
 class DiscussionsClient(
@@ -527,7 +558,20 @@ class DiscussionsClient(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun listNotices(owner: String, repo: String, token: String): List<Notice> {
+    fun listNotices(
+        owner: String,
+        repo: String,
+        token: String,
+        cache: CacheStore? = null,
+        forceNetwork: Boolean = false,
+        now: Instant = Instant.now(),
+    ): List<Notice> {
+        val queryName = GraphQLFreshness.listNoticesQueryName(owner, repo)
+        if (!forceNetwork && cache != null) {
+            GraphQLFreshness.freshBody(cache, queryName, now)?.let { body ->
+                return json.decodeFromString(ListSerializer(Notice.serializer()), body)
+            }
+        }
         val root = Graphql.post(
             transport,
             apiBase,
@@ -548,7 +592,7 @@ class DiscussionsClient(
         if (repository is JsonNull) return emptyList()
         val nodes = repository.jsonObject["discussions"]?.jsonObject?.get("nodes")?.jsonArray
             ?: return emptyList()
-        return nodes.mapNotNull { element ->
+        val notices = nodes.mapNotNull { element ->
             if (element !is JsonObject) return@mapNotNull null
             val id = element["id"].textOrNull() ?: return@mapNotNull null
             Notice(
@@ -558,6 +602,15 @@ class DiscussionsClient(
                 element["author"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull(),
             )
         }
+        if (cache != null) {
+            GraphQLFreshness.store(
+                cache,
+                queryName,
+                json.encodeToString(ListSerializer(Notice.serializer()), notices),
+                now,
+            )
+        }
+        return notices
     }
 
     fun getNotice(id: String, token: String): Notice {

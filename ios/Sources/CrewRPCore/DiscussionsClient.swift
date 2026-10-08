@@ -1,6 +1,6 @@
 import Foundation
 
-public struct Notice: Sendable, Equatable, Identifiable {
+public struct Notice: Sendable, Equatable, Identifiable, Codable {
     public let id: String
     public let title: String
     public let body: String
@@ -35,7 +35,18 @@ public struct DiscussionsClient: Sendable {
         self.apiBase = apiBase
     }
 
-    public func listNotices(owner: String, repo: String, token: String) async throws -> [Notice] {
+    public func listNotices(
+        owner: String,
+        repo: String,
+        token: String,
+        cache: CacheStore? = nil,
+        forceNetwork: Bool = false,
+        now: Date = Date()
+    ) async throws -> [Notice] {
+        let queryName = GraphQLFreshness.listNoticesQueryName(owner: owner, repo: repo)
+        if !forceNetwork, let cache, let cached = GraphQLFreshness.freshBody(cache: cache, queryName: queryName, now: now) {
+            return try JSONDecoder().decode([Notice].self, from: cached)
+        }
         let query = """
         query($owner:String!,$name:String!){
           repository(owner:$owner,name:$name){
@@ -64,9 +75,13 @@ public struct DiscussionsClient: Sendable {
             let data: DataObj
         }
         let decoded = try JSONDecoder().decode(Envelope.self, from: data)
-        return (decoded.data.repository?.discussions.nodes ?? []).map {
+        let notices = (decoded.data.repository?.discussions.nodes ?? []).map {
             Notice(id: $0.id, title: $0.title, body: $0.body, authorLogin: $0.author?.login)
         }
+        if let cache, let encoded = try? JSONEncoder().encode(notices) {
+            GraphQLFreshness.store(cache: cache, queryName: queryName, body: encoded, now: now)
+        }
+        return notices
     }
 
     public func getNotice(id: String, token: String) async throws -> Notice {

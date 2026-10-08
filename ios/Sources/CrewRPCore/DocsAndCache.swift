@@ -77,13 +77,13 @@ public struct DocsClient: Sendable {
     }
 
     public func listDocs(owner: String, repo: String, token: String, path: String = "docs") async throws -> [DocEntry] {
-        var request = URLRequest(url: apiBase.appending(path: "repos/\(owner)/\(repo)/contents/\(path)"))
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await transport.data(for: request)
-        if response.statusCode == 404 { return [] }
-        guard (200..<300).contains(response.statusCode) else {
-            throw GitHubAPIError.httpStatus(response.statusCode)
+        let url = apiBase.appending(path: "repos/\(owner)/\(repo)/contents/\(path)")
+        let response: CachedHTTPResponse
+        do {
+            response = try await rest.get(url: url, token: token)
+        } catch {
+            if case GitHubAPIError.httpStatus(404) = error { return [] }
+            throw error
         }
         struct Entry: Decodable {
             let path: String
@@ -91,7 +91,8 @@ public struct DocsClient: Sendable {
             let sha: String?
             let type: String
         }
-        let entries = try JSONDecoder().decode([Entry].self, from: data)
+        // Contents API may return a single file object; treat non-array as empty listing.
+        guard let entries = try? JSONDecoder().decode([Entry].self, from: response.body) else { return [] }
         return entries.map { DocEntry(path: $0.path, name: $0.name, sha: $0.sha, isDir: $0.type == "dir") }
     }
 
