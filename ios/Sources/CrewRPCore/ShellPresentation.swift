@@ -34,6 +34,39 @@ public func dueOnInput(_ iso: String?) -> String {
     return String(iso.prefix(10))
 }
 
+/// 할 일 저장 시 납기 해석. 빈 값은 생략, 형식이 아니면 invalid.
+public enum TaskDueSaveValue: Equatable, Sendable {
+    case none
+    case date(String)
+    case invalid
+}
+
+public func taskDueSaveValue(_ raw: String?) -> TaskDueSaveValue {
+    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if trimmed.isEmpty { return .none }
+    let day = dueOnInput(trimmed)
+    guard day.count == 10 else { return .invalid }
+    let parts = day.split(separator: "-", omittingEmptySubsequences: false)
+    guard parts.count == 3,
+          parts[0].count == 4,
+          parts[1].count == 2,
+          parts[2].count == 2,
+          parts.allSatisfy({ $0.allSatisfy(\.isNumber) })
+    else { return .invalid }
+    return .date(day)
+}
+
+public func taskCardApplying(_ card: TaskCard, status: String, dueOn: String?) -> TaskCard {
+    TaskCard(
+        id: card.id,
+        title: card.title,
+        status: status,
+        dueOn: dueOn,
+        issueNumber: card.issueNumber,
+        contentId: card.contentId
+    )
+}
+
 /// GitHub Projects v2 날짜 필드 표시 이름 (기본값은 "Due date").
 public func isProjectsDueFieldName(_ name: String?) -> Bool {
     guard let name else { return false }

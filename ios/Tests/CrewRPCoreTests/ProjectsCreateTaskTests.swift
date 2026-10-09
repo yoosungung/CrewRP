@@ -118,6 +118,43 @@ struct ProjectsCreateTaskTests {
         #expect(box.created)
     }
 
+    @Test("updateTaskFields sends due and rejects missing due field id")
+    func updateTaskFieldsRequiresDueField() async throws {
+        let transport = MockHTTPTransport()
+        final class Box: @unchecked Sendable { var bodies: [String] = [] }
+        let box = Box()
+        transport.handler = { request in
+            let body = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
+            box.bodies.append(body)
+            return (
+                Data(#"{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"t1"}}}}"#.utf8),
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            )
+        }
+        let client = ProjectsClient(transport: transport)
+        try await client.updateTaskFields(
+            projectId: "P1",
+            itemId: "t1",
+            statusFieldId: "S1",
+            statusOptionId: "o1",
+            dueFieldId: "D1",
+            dueOn: "2026-10-20",
+            token: "tok"
+        )
+        #expect(box.bodies.contains { $0.contains("\"date\":\"2026-10-20\"") || $0.contains("\\\"date\\\":\\\"2026-10-20\\\"") })
+        await #expect(throws: GitHubAPIError.invalidResponse) {
+            try await client.updateTaskFields(
+                projectId: "P1",
+                itemId: "t1",
+                statusFieldId: "S1",
+                statusOptionId: "o1",
+                dueFieldId: nil,
+                dueOn: "2026-10-20",
+                token: "tok"
+            )
+        }
+    }
+
     @Test("resolveProjectNumber falls back to listed project")
     func resolveFallsBack() async throws {
         let transport = MockHTTPTransport()

@@ -333,19 +333,29 @@ final class AppModel: ObservableObject {
     }
 
     func updateTask(_ card: TaskCard, status: String, dueOn: String?) async {
-        guard let meta = projectMeta else { return }
-        let due = dueOn.flatMap { value in
-            let trimmed = dueOnInput(value)
-            return trimmed.isEmpty ? nil : trimmed
+        let dueValue = taskDueSaveValue(dueOn)
+        if case .invalid = dueValue {
+            writeError = "납기는 YYYY-MM-DD 형식으로 입력해 주세요."
+            return
         }
+        let due: String? = if case .date(let day) = dueValue { day } else { nil }
         await withToken { token, owner, _ in
             let projects = ProjectsClient(transport: transport)
+            let org = session?.org ?? owner
             let number = try await projects.resolveProjectNumber(
-                owner: session?.org ?? owner, preferred: projectNumber, token: token
+                owner: org, preferred: projectNumber, token: token
             )
+            let loaded = try await projects.loadFieldMeta(owner: org, projectNumber: number, token: token)
+            guard let base = loaded ?? projectMeta else {
+                throw GitHubAPIError.invalidResponse
+            }
             let ready = try await projects.ensureDueDateField(
-                meta: meta, owner: session?.org ?? owner, projectNumber: number, token: token
+                meta: base, owner: org, projectNumber: number, token: token
             )
+            projectMeta = ready
+            if due != nil, ready.dueFieldId == nil {
+                throw GitHubAPIError.invalidResponse
+            }
             let opt = ready.statusOptions.first { key, _ in
                 key == status || taskLane(status: key) == taskLane(status: status)
             }?.value
@@ -358,6 +368,10 @@ final class AppModel: ObservableObject {
                 dueOn: due,
                 token: token
             )
+            if let idx = tasks.firstIndex(where: { $0.id == card.id }) {
+                let nextDue = due ?? card.dueOn
+                tasks[idx] = taskCardApplying(card, status: status, dueOn: nextDue)
+            }
         }
     }
 
@@ -789,6 +803,7 @@ private struct TaskEditSheet: View {
 
     @State private var status: String
     @State private var dueOn: String
+    @State private var dueError: String?
 
     init(
         task: TaskCard,
@@ -815,16 +830,18 @@ private struct TaskEditSheet: View {
                 }
                 .pickerStyle(.segmented)
                 TextField("납기 (YYYY-MM-DD)", text: $dueOn)
+                    .keyboardType(.asciiCapable)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if let dueError {
+                    Text(dueError).font(.footnote).foregroundStyle(.red)
+                }
             }
             .navigationTitle("할 일 수정")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("닫기") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("저장") {
-                        let due = dueOnInput(dueOn)
-                        onSave(status, due.isEmpty ? nil : due)
-                        dismiss()
-                    }
+                    Button("저장") { save() }
                 }
                 if showDelete, let onDelete {
                     ToolbarItem(placement: .bottomBar) {
@@ -835,6 +852,21 @@ private struct TaskEditSheet: View {
                     }
                 }
             }
+        }
+    }
+
+    private func save() {
+        switch taskDueSaveValue(dueOn) {
+        case .invalid:
+            dueError = "납기는 YYYY-MM-DD 형식으로 입력해 주세요."
+        case .none:
+            dueError = nil
+            onSave(status, nil)
+            dismiss()
+        case .date(let day):
+            dueError = nil
+            onSave(status, day)
+            dismiss()
         }
     }
 }

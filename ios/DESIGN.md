@@ -36,7 +36,7 @@ CREWRP_E2E_TOKEN=… CREWRP_E2E_REPO=owner/repo ../scripts/e2e-crud.sh
 - 포인트 색은 틸이고, 배경은 시스템 grouped 색을 따른다. 앱 아이콘은 `CrewRPApp/Assets.xcassets`의 틸 배경·세 명 실루엣이다.
 - 소통에서 입력 중 칸 밖(메시지 목록)을 누르면 포커스를 해제하고 키보드를 닫아 탭이 다시 보인다.
 - 할 일은 칸반(접수·진행 중·완료)과 마감일 목록을 전환한다. compact(폰) 칸반은 레인별 세로 섹션(전체 너비)이고, 와이드는 다열을 유지한다. 홈은 오늘 할 일, 고정 공지, 다가오는 할 일이다.
-- 할 일 상세는 상태(세그먼트)와 납기(YYYY-MM-DD)를 보여 주고 Projects v2 Status·날짜 필드에 저장한다. 보드에 날짜 필드가 없으면 `Due date`(DATE)를 만든다. `updateTask`는 Due를 보낸다.
+- 할 일 상세는 상태(세그먼트)와 납기(YYYY-MM-DD)를 보여 주고 Projects v2 Status·날짜 필드에 저장한다. 보드에 날짜 필드가 없으면 `Due date`(DATE)를 만든다. `updateTask`는 meta를 재로드·ensure한 뒤 Due를 보내고, meta/`dueFieldId` 부재·형식 오류는 `writeError`로 드러내며 카드에 낙관적 반영한다.
 - 불러오기 실패는 다시 시도를 보여 준다. Discord 식별자가 비어 있으면 바로 대화 버튼을 숨긴다.
 - 공지·할 일·자료실·소통은 앱에서 CRUD한다. 탭의 `+`로 작성, 항목으로 상세·수정·삭제. 운영진은 전 항목, 멤버는 본인 작성분만 수정·삭제.
 - 자료실은 목록(파일·폴더) → 시트 상세(렌더·편집·삭제). `listDocs(path:)`로 폴더 드릴다운·상위 복귀, 이름·경로 필터 검색. compact에서 목록+본문 split을 쓰지 않는다.

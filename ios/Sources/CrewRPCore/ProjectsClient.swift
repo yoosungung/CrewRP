@@ -299,6 +299,9 @@ public struct ProjectsClient: Sendable {
         dueOn: String?,
         token: String
     ) async throws {
+        if dueOn != nil && dueFieldId == nil {
+            throw GitHubAPIError.invalidResponse
+        }
         let mutation = """
         mutation($input:UpdateProjectV2ItemFieldValueInput!){
           updateProjectV2ItemFieldValue(input:$input){ projectV2Item { id } }
