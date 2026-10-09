@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     @Published var docPath: String = "docs/README.md"
     @Published var docSha: String?
     @Published var docs: [DocEntry] = []
+    @Published var docsDirPath: String = "docs"
     @Published var threadMessages: [ThreadMessage] = []
     @Published var isLoading = false
     @Published var tasksFailed = false
@@ -120,6 +121,7 @@ final class AppModel: ObservableObject {
         tasks = []
         notices = []
         docs = []
+        docsDirPath = "docs"
         threadMessages = []
         currentLogin = nil
         projectMeta = nil
@@ -136,7 +138,7 @@ final class AppModel: ObservableObject {
         let repo = parts.repo
         let org = session.org
         let preferredProject = projectNumber
-        let fallbackDocPath = docPath
+        let listPath = docsDirPath
         let transport = self.transport
         let cache = self.cache
         isLoading = true
@@ -153,9 +155,7 @@ final class AppModel: ObservableObject {
             var noticesFailed = false
             var discussionSetup: DiscussionSetup?
             var docs: [DocEntry] = []
-            var docPath: String
-            var docPreview: String = ""
-            var docSha: String?
+            var docsDirPath: String
             var docFailed = false
             var talkIssueNumber = 1
             var threadMessages: [ThreadMessage] = []
@@ -210,20 +210,16 @@ final class AppModel: ObservableObject {
                 }
             }()
 
-            async let docsTask: (entries: [DocEntry], path: String, preview: String, sha: String?, failed: Bool) = {
+            async let docsTask: (entries: [DocEntry], dir: String, failed: Bool) = {
                 let docsClient = DocsClient(transport: transport, cache: cache)
-                let entries = (try? await docsClient.listDocs(owner: owner, repo: repo, token: token)) ?? []
-                let path = entries.first(where: { !$0.isDir && $0.name.lowercased() == "readme.md" })?.path
-                    ?? entries.first(where: { !$0.isDir })?.path
-                    ?? fallbackDocPath
                 do {
-                    let file = try await docsClient.fetchMarkdown(owner: owner, repo: repo, path: path, token: token)
-                    return (entries, file.path, file.content, file.sha, false)
+                    let entries = try await docsClient.listDocs(owner: owner, repo: repo, token: token, path: listPath)
+                    return (entries, listPath, false)
                 } catch {
                     if case GitHubAPIError.httpStatus(404) = error {
-                        return (entries, path, "", nil, false)
+                        return ([], listPath, false)
                     }
-                    return (entries, path, "", nil, true)
+                    return ([], listPath, true)
                 }
             }()
 
@@ -253,9 +249,7 @@ final class AppModel: ObservableObject {
                 noticesFailed: notices.failed,
                 discussionSetup: notices.setup,
                 docs: docs.entries,
-                docPath: docs.path,
-                docPreview: docs.preview,
-                docSha: docs.sha,
+                docsDirPath: docs.dir,
                 docFailed: docs.failed,
                 talkIssueNumber: talk.issue,
                 threadMessages: talk.messages,
@@ -274,11 +268,9 @@ final class AppModel: ObservableObject {
         }
         noticesFailed = snapshot.noticesFailed
         if let setup = snapshot.discussionSetup { discussionSetup = setup }
-        docs = snapshot.docs
-        docPath = snapshot.docPath
-        if !snapshot.docFailed || docPreview.isEmpty {
-            docPreview = snapshot.docPreview
-            docSha = snapshot.docSha
+        if !snapshot.docFailed || docs.isEmpty {
+            docs = snapshot.docs
+            docsDirPath = snapshot.docsDirPath
         }
         docFailed = snapshot.docFailed
         if !snapshot.threadsFailed || threadMessages.isEmpty {
@@ -396,8 +388,30 @@ final class AppModel: ObservableObject {
             docPreview = file.content
             docSha = file.sha
             docFailed = false
+            writeError = nil
         } catch {
             writeError = writeFailureMessage(String(describing: error))
+        }
+    }
+
+    func listDocs(at path: String) async {
+        guard let token = try? tokens.loadAccessToken(), let parts = repoParts else { return }
+        do {
+            let entries = try await DocsClient(transport: transport, cache: cache)
+                .listDocs(owner: parts.owner, repo: parts.repo, token: token, path: path)
+            docsDirPath = path
+            docs = entries
+            docFailed = false
+            writeError = nil
+        } catch {
+            if case GitHubAPIError.httpStatus(404) = error {
+                docsDirPath = path
+                docs = []
+                docFailed = false
+            } else {
+                writeError = writeFailureMessage(String(describing: error))
+                docFailed = true
+            }
         }
     }
 
@@ -828,30 +842,108 @@ private struct TaskEditSheet: View {
 private struct DocsTab: View {
     @ObservedObject var model: AppModel
     @State private var composing = false
-    @State private var editing = false
-    @State private var draft = ""
+    @State private var showingDetail = false
+    @State private var search = ""
+
+    private var listed: [DocEntry] { filterDocs(model.docs, query: search) }
+    private var parentPath: String? { parentDocsPath(model.docsDirPath) }
 
     var body: some View {
         NavigationStack {
             Group {
-                if model.isLoading && model.docPreview.isEmpty && !model.docFailed {
+                if model.isLoading && model.docs.isEmpty && !model.docFailed {
                     ProgressView()
-                } else if model.docFailed && model.docPreview.isEmpty {
+                } else if model.docFailed && model.docs.isEmpty {
                     FailedHint { await model.refreshHomeData(forceNetwork: true) }
-                } else if editing {
+                } else {
+                    VStack(spacing: 0) {
+                        if let err = model.writeError {
+                            Text(err).font(.footnote).foregroundStyle(.red).padding(8)
+                        }
+                        TextField("이름·경로 검색", text: $search)
+                            .textFieldStyle(.roundedBorder)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                        if listed.isEmpty {
+                            EmptyHint(
+                                title: model.docs.isEmpty ? "자료실이 비어 있습니다" : "검색 결과가 없습니다",
+                                message: model.docs.isEmpty ? "+ 로 자료를 추가하세요." : "다른 검색어를 입력해 보세요."
+                            )
+                        } else {
+                            List(listed, id: \.path) { entry in
+                                Button {
+                                    if entry.isDir {
+                                        Task { await model.listDocs(at: entry.path) }
+                                    } else {
+                                        Task {
+                                            await model.openDoc(path: entry.path)
+                                            showingDetail = true
+                                        }
+                                    }
+                                } label: {
+                                    Label(entry.name, systemImage: entry.isDir ? "folder.fill" : "doc.text")
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                            .listStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("자료실")
+            .toolbar {
+                if let parentPath {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            Task { await model.listDocs(at: parentPath) }
+                        } label: {
+                            Label("상위", systemImage: "chevron.up")
+                        }
+                    }
+                }
+                RefreshButton(model: model)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { composing = true } label: { Image(systemName: "plus") }
+                }
+            }
+            .refreshable { await model.refreshHomeData(forceNetwork: true) }
+            .sheet(isPresented: $composing) {
+                ComposeSheet(
+                    title: "자료 저장",
+                    titleLabel: "경로 (docs/…)",
+                    bodyLabel: "내용",
+                    initialTitle: model.docsDirPath == "docs" ? "docs/notes.md" : "\(model.docsDirPath)/notes.md"
+                ) { path, body in
+                    Task { await model.saveDoc(path: path, content: body) }
+                }
+            }
+            .sheet(isPresented: $showingDetail) {
+                DocDetailSheet(model: model)
+            }
+        }
+    }
+}
+
+private struct DocDetailSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var editing = false
+    @State private var draft = ""
+
+    private var canDelete: Bool { model.session?.teamRole == .admin && model.docSha != nil }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if editing {
                     TextEditor(text: $draft).padding()
                 } else if docBlocks(model.docPreview).isEmpty {
-                    EmptyHint(title: "자료실이 비어 있습니다", message: "+ 로 자료를 추가하세요.")
+                    EmptyHint(title: "내용이 없습니다", message: "편집으로 내용을 추가하세요.")
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
-                            ScrollView(.horizontal) {
-                                HStack {
-                                    ForEach(model.docs.filter { !$0.isDir }, id: \.path) { entry in
-                                        Button(entry.name) { Task { await model.openDoc(path: entry.path) } }
-                                    }
-                                }
-                            }
                             ForEach(Array(docBlocks(model.docPreview).enumerated()), id: \.offset) { _, block in
                                 switch block {
                                 case .heading(let text): Text(text).font(.title2.bold()).padding(.top, 8)
@@ -865,12 +957,11 @@ private struct DocsTab: View {
                     }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle("자료실")
+            .navigationTitle(model.docPath.split(separator: "/").last.map(String.init) ?? "자료")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                RefreshButton(model: model)
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { composing = true } label: { Image(systemName: "plus") }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("닫기") { dismiss() }
                 }
                 if editing {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -878,6 +969,7 @@ private struct DocsTab: View {
                             Task {
                                 await model.saveDoc(path: model.docPath, content: draft)
                                 editing = false
+                                dismiss()
                             }
                         }
                     }
@@ -888,12 +980,16 @@ private struct DocsTab: View {
                             editing = true
                         }
                     }
-                }
-            }
-            .refreshable { await model.refreshHomeData(forceNetwork: true) }
-            .sheet(isPresented: $composing) {
-                ComposeSheet(title: "자료 저장", titleLabel: "경로 (docs/…)", bodyLabel: "내용", initialTitle: "docs/notes.md") { path, body in
-                    Task { await model.saveDoc(path: path, content: body) }
+                    if canDelete {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("삭제", role: .destructive) {
+                                Task {
+                                    await model.deleteDoc()
+                                    dismiss()
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

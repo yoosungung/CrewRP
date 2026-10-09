@@ -140,6 +140,7 @@ class MainActivity : ComponentActivity() {
                         cache,
                         BuildConfig.PROJECT_NUMBER.toIntOrNull() ?: 1,
                         forceNetwork = refreshTick > 0,
+                        docsDirPath = previous.docsDirPath,
                     )
                     runOnUiThread {
                         if (request != loadId) return@runOnUiThread
@@ -147,7 +148,11 @@ class MainActivity : ComponentActivity() {
                             tasks = if (loaded.tasksFailed && previous.tasks.isNotEmpty()) previous.tasks else loaded.tasks,
                             notices = if (loaded.noticesFailed && previous.notices.isNotEmpty()) previous.notices else loaded.notices,
                             threads = if (loaded.threadsFailed && previous.threads.isNotEmpty()) previous.threads else loaded.threads,
-                            doc = if (loaded.docFailed && previous.doc.isNotEmpty()) previous.doc else loaded.doc,
+                            docs = if (loaded.docFailed && previous.docs.isNotEmpty()) previous.docs else loaded.docs,
+                            docsDirPath = if (loaded.docFailed && previous.docs.isNotEmpty()) previous.docsDirPath else loaded.docsDirPath,
+                            doc = previous.doc,
+                            docPath = previous.docPath,
+                            docSha = previous.docSha,
                         )
                     }
                 }
@@ -229,6 +234,19 @@ class MainActivity : ComponentActivity() {
                                                 docPath = file.path,
                                                 doc = file.content,
                                                 docSha = file.sha,
+                                                docFailed = false,
+                                                writeError = null,
+                                            )
+                                        }
+                                    }
+                                },
+                                onListDocs = { path ->
+                                    runWrite(refresh = false) { writer ->
+                                        val entries = writer.listDocs(path)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                docs = entries,
+                                                docsDirPath = path,
                                                 docFailed = false,
                                                 writeError = null,
                                             )

@@ -125,3 +125,23 @@ fun docBlocks(markdown: String): List<DocBlock> {
     flush()
     return blocks
 }
+
+/** 현재 목록에서 이름·경로 부분 일치(대소문자 무시). 빈 쿼리는 전체. 폴더 우선·이름 정렬. */
+fun filterDocs(entries: List<DocEntry>, query: String): List<DocEntry> {
+    val q = query.trim()
+    val filtered = if (q.isEmpty()) {
+        entries
+    } else {
+        entries.filter { it.name.contains(q, ignoreCase = true) || it.path.contains(q, ignoreCase = true) }
+    }
+    return filtered.sortedWith(compareByDescending<DocEntry> { it.isDir }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+}
+
+/** `/docs` 루트면 null. 그 외 상위 path (Contents API list 대상). */
+fun parentDocsPath(path: String): String? {
+    val trimmed = path.trim('/').trimEnd('/')
+    if (trimmed.isEmpty() || trimmed == "docs") return null
+    val slash = trimmed.lastIndexOf('/')
+    if (slash <= 0) return null
+    return trimmed.substring(0, slash).ifEmpty { null }
+}

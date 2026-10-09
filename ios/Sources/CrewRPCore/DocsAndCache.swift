@@ -63,6 +63,13 @@ public struct DocEntry: Sendable, Equatable {
     public let name: String
     public let sha: String?
     public let isDir: Bool
+
+    public init(path: String, name: String, sha: String? = nil, isDir: Bool) {
+        self.path = path
+        self.name = name
+        self.sha = sha
+        self.isDir = isDir
+    }
 }
 
 public struct DocsClient: Sendable {

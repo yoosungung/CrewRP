@@ -575,6 +575,28 @@ struct ShellPresentationTests {
         #expect(blocks == [.heading("정관"), .paragraph("첫 문단 이어짐"), .bullet("하나")])
     }
 
+    @Test("filterDocs matches name or path case-insensitively; empty query keeps all; dirs first")
+    func filterDocsQuery() {
+        let entries = [
+            DocEntry(path: "docs/README.md", name: "README.md", sha: nil, isDir: false),
+            DocEntry(path: "docs/guides", name: "guides", sha: nil, isDir: true),
+            DocEntry(path: "docs/guides/onboard.md", name: "onboard.md", sha: nil, isDir: false),
+            DocEntry(path: "docs/notes.md", name: "notes.md", sha: nil, isDir: false),
+        ]
+        #expect(filterDocs(entries, query: "").map(\.name) == ["guides", "notes.md", "onboard.md", "README.md"])
+        #expect(filterDocs(entries, query: "GUIDE").map(\.path) == ["docs/guides", "docs/guides/onboard.md"])
+        #expect(filterDocs(entries, query: "readme").map(\.name) == ["README.md"])
+        #expect(filterDocs(entries, query: "   ").count == 4)
+    }
+
+    @Test("parentDocsPath walks up until docs root")
+    func parentDocsPathWalk() {
+        #expect(parentDocsPath("docs") == nil)
+        #expect(parentDocsPath("docs/") == nil)
+        #expect(parentDocsPath("docs/guides") == "docs")
+        #expect(parentDocsPath("docs/guides/deep") == "docs/guides")
+    }
+
     @Test("canMutate allows admin or author")
     func mutate() {
         #expect(canMutate(role: .admin, authorLogin: "other", currentLogin: "me"))

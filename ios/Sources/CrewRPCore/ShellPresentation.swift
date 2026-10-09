@@ -177,3 +177,31 @@ public func docBlocks(_ markdown: String) -> [DocBlock] {
     flush()
     return blocks
 }
+
+/// 현재 목록에서 이름·경로 부분 일치(대소문자 무시). 빈 쿼리는 전체. 폴더 우선·이름 정렬.
+public func filterDocs(_ entries: [DocEntry], query: String) -> [DocEntry] {
+    let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let filtered: [DocEntry]
+    if q.isEmpty {
+        filtered = entries
+    } else {
+        filtered = entries.filter {
+            $0.name.range(of: q, options: .caseInsensitive) != nil
+                || $0.path.range(of: q, options: .caseInsensitive) != nil
+        }
+    }
+    return filtered.sorted { a, b in
+        if a.isDir != b.isDir { return a.isDir && !b.isDir }
+        return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+    }
+}
+
+/// `/docs` 루트면 nil. 그 외 상위 path (Contents API list 대상).
+public func parentDocsPath(_ path: String) -> String? {
+    var trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    while trimmed.hasSuffix("/") { trimmed.removeLast() }
+    guard !trimmed.isEmpty, trimmed != "docs" else { return nil }
+    guard let slash = trimmed.lastIndex(of: "/") else { return nil }
+    let parent = String(trimmed[..<slash])
+    return parent.isEmpty ? nil : parent
+}
