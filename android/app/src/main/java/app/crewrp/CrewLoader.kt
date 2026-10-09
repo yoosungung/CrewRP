@@ -29,6 +29,7 @@ data class CrewContent(
     val threads: List<ThreadMessage> = emptyList(),
     val threadsFailed: Boolean = false,
     val docs: List<DocEntry> = emptyList(),
+    val docsDirPath: String = "docs",
     val docPath: String = "docs/README.md",
     val doc: String = "",
     val docSha: String? = null,
@@ -51,6 +52,7 @@ fun fetchCrewContent(
     cache: CacheStore,
     projectNumber: Int,
     forceNetwork: Boolean = false,
+    docsDirPath: String = "docs",
 ): CrewContent {
     val (owner, repo) = parts(session) ?: return CrewContent(
         tasksFailed = true,
@@ -106,16 +108,11 @@ fun fetchCrewContent(
         val docsF: Future<DocsBundle> = pool.submit(
             Callable {
                 val docsClient = DocsClient(transport, cache)
-                val docs = runCatching { docsClient.listDocs(owner, repo, token) }
-                val docPath = docs.getOrNull()?.firstOrNull { !it.isDir && it.name.equals("README.md", true) }?.path
-                    ?: "docs/README.md"
-                val doc = runCatching { docsClient.fetchMarkdown(owner, repo, docPath, token) }
+                val docs = runCatching { docsClient.listDocs(owner, repo, token, docsDirPath) }
                 DocsBundle(
                     docs.getOrDefault(emptyList()),
-                    docPath,
-                    doc.getOrNull()?.content.orEmpty(),
-                    doc.getOrNull()?.sha,
-                    doc.isFailure,
+                    docsDirPath,
+                    docs.isFailure,
                 )
             },
         )
@@ -132,9 +129,7 @@ fun fetchCrewContent(
             threads = talk.first,
             threadsFailed = talk.second,
             docs = docs.entries,
-            docPath = docs.path,
-            doc = docs.content,
-            docSha = docs.sha,
+            docsDirPath = docs.dirPath,
             docFailed = docs.failed,
             projectMeta = tasks.third,
             discussionSetup = notices.third,
@@ -147,9 +142,7 @@ fun fetchCrewContent(
 
 private data class DocsBundle(
     val entries: List<DocEntry>,
-    val path: String,
-    val content: String,
-    val sha: String?,
+    val dirPath: String,
     val failed: Boolean,
 )
 
@@ -210,6 +203,9 @@ class CrewWriter(
 
     fun openDoc(path: String): DocFile =
         DocsClient(transport, cache).fetchMarkdown(owner, repo, path, token)
+
+    fun listDocs(path: String): List<DocEntry> =
+        DocsClient(transport, cache).listDocs(owner, repo, token, path)
 
     fun postTalk(body: String): ThreadMessage {
         val talk = ThreadTalkClient(transport)

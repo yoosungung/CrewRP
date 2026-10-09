@@ -24,8 +24,10 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Folder
@@ -53,6 +55,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -81,11 +84,14 @@ import app.crewrp.core.ThreadMessage
 import app.crewrp.core.canMutate
 import app.crewrp.core.crewDisplayName
 import app.crewrp.core.crewOwnerName
+import app.crewrp.core.DocEntry
 import app.crewrp.core.docBlocks
 import app.crewrp.core.dueOnInput
+import app.crewrp.core.filterDocs
 import app.crewrp.core.formatDue
 import app.crewrp.core.homeSections
 import app.crewrp.core.kanbanUsesStackedLanes
+import app.crewrp.core.parentDocsPath
 import app.crewrp.core.roleLabel
 import app.crewrp.core.taskLane
 import app.crewrp.core.taskStatusChoice
@@ -101,6 +107,7 @@ data class CrewActions(
     val onSaveDoc: (path: String, content: String) -> Unit,
     val onDeleteDoc: () -> Unit,
     val onOpenDoc: (path: String) -> Unit,
+    val onListDocs: (path: String) -> Unit,
     val onPostTalk: (body: String) -> Unit,
     val onUpdateTalk: (ThreadMessage, body: String) -> Unit,
     val onDeleteTalk: (ThreadMessage) -> Unit,
@@ -206,6 +213,7 @@ fun CrewShell(
     var editingNotice by remember { mutableStateOf<Notice?>(null) }
     var editingTask by remember { mutableStateOf<TaskCard?>(null) }
     var editingTalk by remember { mutableStateOf<ThreadMessage?>(null) }
+    var viewingDoc by remember { mutableStateOf(false) }
     var talkDraft by remember { mutableStateOf("") }
     val name = crewDisplayName(session.repo)
 
@@ -263,7 +271,13 @@ fun CrewShell(
             when (tab) {
                 0 -> HomeTab(session, content, Modifier.weight(1f), onOpenNotice = { editingNotice = it })
                 1 -> TasksTab(content, Modifier.weight(1f), onRefresh, onOpen = { editingTask = it })
-                2 -> DocsTab(content, session.teamRole, Modifier.weight(1f), onRefresh, actions)
+                2 -> DocsTab(
+                    content,
+                    Modifier.weight(1f),
+                    onRefresh,
+                    actions,
+                    onOpenDetail = { viewingDoc = true },
+                )
                 else -> TalkTab(
                     content,
                     discordEnabled,
@@ -303,7 +317,7 @@ fun CrewShell(
         ComposeKind.Doc -> FormDialog(
             title = "자료 저장",
             titleLabel = "경로 (docs/…)",
-            initialTitle = "docs/notes.md",
+            initialTitle = if (content.docsDirPath == "docs") "docs/notes.md" else "${content.docsDirPath}/notes.md",
             bodyLabel = "내용",
             onDismiss = { compose = null },
             onSubmit = { path, body ->
@@ -313,6 +327,22 @@ fun CrewShell(
             },
         )
         null -> Unit
+    }
+
+    if (viewingDoc) {
+        DocDetailDialog(
+            content = content,
+            role = session.teamRole,
+            onDismiss = { viewingDoc = false },
+            onSave = { path, body ->
+                actions.onSaveDoc(path, body)
+                viewingDoc = false
+            },
+            onDelete = {
+                actions.onDeleteDoc()
+                viewingDoc = false
+            },
+        )
     }
 
     editingNotice?.let { notice ->
@@ -565,52 +595,145 @@ private fun KanbanLane(tasks: List<TaskCard>, lane: TaskLane, modifier: Modifier
 @Composable
 private fun DocsTab(
     content: CrewContent,
-    role: TeamRole,
     modifier: Modifier,
     onRetry: () -> Unit,
     actions: CrewActions,
+    onOpenDetail: () -> Unit,
 ) {
-    var editing by remember { mutableStateOf(false) }
-    var draft by remember(content.docPath, content.doc) { mutableStateOf(content.doc) }
-    val blocks = docBlocks(content.doc)
+    var search by remember { mutableStateOf("") }
+    var pendingPath by remember { mutableStateOf<String?>(null) }
+    val listed = filterDocs(content.docs, search)
+    val parent = parentDocsPath(content.docsDirPath)
+    LaunchedEffect(content.docPath, content.doc, pendingPath) {
+        val want = pendingPath ?: return@LaunchedEffect
+        if (content.docPath == want) {
+            onOpenDetail()
+            pendingPath = null
+        }
+    }
     when {
-        content.loading && content.doc.isEmpty() && !content.docFailed -> LoadingPane(modifier)
-        content.docFailed && content.doc.isEmpty() -> FailedPane(modifier, onRetry)
+        content.loading && content.docs.isEmpty() && !content.docFailed -> LoadingPane(modifier)
+        content.docFailed && content.docs.isEmpty() -> FailedPane(modifier, onRetry)
         else -> Column(modifier.fillMaxSize()) {
-            if (content.docs.isNotEmpty()) {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(content.docs.filter { !it.isDir }) { entry ->
-                        TextButton(onClick = { actions.onOpenDoc(entry.path) }) { Text(entry.name) }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (parent != null) {
+                    IconButton(onClick = { actions.onListDocs(parent) }) {
+                        Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "상위")
                     }
                 }
+                OutlinedTextField(
+                    search,
+                    { search = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("이름·경로 검색") },
+                    singleLine = true,
+                )
             }
-            if (editing) {
-                OutlinedTextField(draft, { draft = it }, modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp), minLines = 12)
-                Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { actions.onSaveDoc(content.docPath, draft); editing = false }) { Text("저장") }
-                    TextButton(onClick = { editing = false; draft = content.doc }) { Text("취소") }
-                    if (role == TeamRole.ADMIN && content.docSha != null) {
-                        TextButton(onClick = { actions.onDeleteDoc(); editing = false }) { Text("삭제") }
-                    }
-                }
-            } else if (blocks.isEmpty()) {
-                EmptyPane(Modifier.weight(1f), "자료실이 비어 있습니다", "+ 로 자료를 추가하세요.")
+            if (listed.isEmpty()) {
+                EmptyPane(
+                    Modifier.weight(1f),
+                    if (content.docs.isEmpty()) "자료실이 비어 있습니다" else "검색 결과가 없습니다",
+                    if (content.docs.isEmpty()) "+ 로 자료를 추가하세요." else "다른 검색어를 입력해 보세요.",
+                )
             } else {
-                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(blocks.size) { i ->
-                        when (val block = blocks[i]) {
-                            is DocBlock.Heading -> Text(block.text, style = MaterialTheme.typography.titleLarge)
-                            is DocBlock.Bullet -> Text("·  ${block.text}", style = MaterialTheme.typography.bodyLarge, lineHeight = 24.sp)
-                            is DocBlock.Paragraph -> Text(block.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 24.sp)
-                        }
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+                    items(listed, key = { it.path }) { entry ->
+                        DocRow(
+                            entry = entry,
+                            onClick = {
+                                if (entry.isDir) {
+                                    actions.onListDocs(entry.path)
+                                } else {
+                                    pendingPath = entry.path
+                                    actions.onOpenDoc(entry.path)
+                                }
+                            },
+                        )
                     }
-                }
-                if (role == TeamRole.ADMIN || role == TeamRole.MEMBER) {
-                    TextButton(onClick = { editing = true }, Modifier.padding(16.dp)) { Text("편집") }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun DocRow(entry: DocEntry, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            if (entry.isDir) Icons.Filled.Folder else Icons.Filled.Description,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+        )
+        Text(entry.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun DocDetailDialog(
+    content: CrewContent,
+    role: TeamRole,
+    onDismiss: () -> Unit,
+    onSave: (path: String, body: String) -> Unit,
+    onDelete: () -> Unit,
+) {
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember(content.docPath, content.doc) { mutableStateOf(content.doc) }
+    val blocks = docBlocks(content.doc)
+    val title = content.docPath.substringAfterLast('/')
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            if (editing) {
+                OutlinedTextField(draft, { draft = it }, modifier = Modifier.fillMaxWidth(), minLines = 10)
+            } else if (blocks.isEmpty()) {
+                Text("내용이 없습니다")
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 360.dp)) {
+                    items(blocks.size) { i ->
+                        when (val block = blocks[i]) {
+                            is DocBlock.Heading -> Text(block.text, style = MaterialTheme.typography.titleMedium)
+                            is DocBlock.Bullet -> Text("·  ${block.text}", style = MaterialTheme.typography.bodyMedium)
+                            is DocBlock.Paragraph -> Text(block.text, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (editing) {
+                TextButton(onClick = { onSave(content.docPath, draft) }) { Text("저장") }
+            } else if (role == TeamRole.ADMIN || role == TeamRole.MEMBER) {
+                TextButton(onClick = { editing = true }) { Text("편집") }
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (!editing && role == TeamRole.ADMIN && content.docSha != null) {
+                    TextButton(onClick = onDelete) { Text("삭제") }
+                }
+                TextButton(onClick = {
+                    if (editing) {
+                        editing = false
+                        draft = content.doc
+                    } else {
+                        onDismiss()
+                    }
+                }) { Text(if (editing) "취소" else "닫기") }
+            }
+        },
+    )
 }
 
 @Composable

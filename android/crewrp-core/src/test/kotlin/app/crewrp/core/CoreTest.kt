@@ -6,6 +6,7 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PKCETest {
@@ -508,6 +509,28 @@ class ShellPresentationTest {
             ),
             blocks,
         )
+    }
+
+    @Test
+    fun filterDocsMatchesNameOrPathCaseInsensitiveDirsFirst() {
+        val entries = listOf(
+            DocEntry("docs/README.md", "README.md", null, false),
+            DocEntry("docs/guides", "guides", null, true),
+            DocEntry("docs/guides/onboard.md", "onboard.md", null, false),
+            DocEntry("docs/notes.md", "notes.md", null, false),
+        )
+        assertEquals(listOf("guides", "notes.md", "onboard.md", "README.md"), filterDocs(entries, "").map { it.name })
+        assertEquals(listOf("docs/guides", "docs/guides/onboard.md"), filterDocs(entries, "GUIDE").map { it.path })
+        assertEquals(listOf("README.md"), filterDocs(entries, "readme").map { it.name })
+        assertEquals(4, filterDocs(entries, "   ").size)
+    }
+
+    @Test
+    fun parentDocsPathWalksUpUntilDocsRoot() {
+        assertNull(parentDocsPath("docs"))
+        assertNull(parentDocsPath("docs/"))
+        assertEquals("docs", parentDocsPath("docs/guides"))
+        assertEquals("docs/guides", parentDocsPath("docs/guides/deep"))
     }
 
     @Test
