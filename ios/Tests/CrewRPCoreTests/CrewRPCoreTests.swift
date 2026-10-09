@@ -554,6 +554,27 @@ struct ShellPresentationTests {
         #expect(dueOnInput(nil) == "")
     }
 
+    @Test("taskDueSaveValue accepts YYYY-MM-DD and rejects junk")
+    func taskDueSave() {
+        #expect(taskDueSaveValue(nil) == .none)
+        #expect(taskDueSaveValue("") == .none)
+        #expect(taskDueSaveValue("  ") == .none)
+        #expect(taskDueSaveValue("2026-10-20") == .date("2026-10-20"))
+        #expect(taskDueSaveValue("2026-10-20T09:00:00Z") == .date("2026-10-20"))
+        #expect(taskDueSaveValue("20/10/2026") == .invalid)
+        #expect(taskDueSaveValue("soon") == .invalid)
+    }
+
+    @Test("replacing task due keeps other fields")
+    func replaceTaskDue() {
+        let card = TaskCard(id: "t1", title: "보고서", status: "접수", dueOn: nil, issueNumber: 3)
+        let updated = taskCardApplying(card, status: "진행 중", dueOn: "2026-10-20")
+        #expect(updated.dueOn == "2026-10-20")
+        #expect(updated.status == "진행 중")
+        #expect(updated.id == "t1")
+        #expect(updated.issueNumber == 3)
+    }
+
     @Test("home keeps today, upcoming, and three notices")
     func home() {
         let tasks = [
