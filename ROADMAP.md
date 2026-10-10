@@ -33,6 +33,14 @@
 - [x] 코어 CRUD E2E 하네스(`scripts/e2e-crud.sh`, `CREWRP_E2E_TOKEN`+`CREWRP_E2E_REPO`; 할 일은 `project` 토큰 또는 에뮬 앱 세션 `DeviceCrudSmokeTest`)
 - 완료 기준: OAuth·Worker·Discord·FCM 실키 투입 후 UI 수동 E2E + `./scripts/e2e-crud.sh` 통과(할 일: host `project` 또는 로그인된 에뮬)
 
+## Phase 4 — 소통 = Discord 계정 연동
+
+- [x] `auth-bridge` Discord 코드 교환 + `@me` (`POST /oauth/discord/token`)
+- [x] 기기 `account_link`(discord) 저장·해제, 로그아웃 시 삭제
+- [x] 소통 탭: Discord 연결 / 바로 대화(딥링크) / 연결 해제 (Issue 말풍선 본체 제거)
+- [ ] Discord OAuth App·서버/채널 ID 실키 투입 후 수동 E2E (`DISCORD_CLIENT_*` Worker 시크릿 + 앱 `DiscordClientID`/`DISCORD_CLIENT_ID`)
+- 완료 기준: GitHub 로그인 후 Discord 연동 → 소통에서 딥링크 진입, 해제·로그아웃 시 연동 기록 없음
+
 ## 미결정
 
 - **투표 생성.** `createDiscussion`에 poll 필드가 없다. 앱에서 투표를 만들 API가 생기기 전에는 만들지 않는다.

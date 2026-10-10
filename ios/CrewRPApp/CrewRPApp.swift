@@ -26,20 +26,19 @@ final class AppModel: ObservableObject {
     @Published var docs: [DocEntry] = []
     @Published var docsTree: [DocEntry] = []
     @Published var docsDirPath: String = "docs"
-    @Published var threadMessages: [ThreadMessage] = []
     @Published var isLoading = false
     @Published var tasksFailed = false
     @Published var noticesFailed = false
     @Published var docFailed = false
-    @Published var threadsFailed = false
     @Published var writeError: String?
     @Published var currentLogin: String?
     @Published var projectMeta: ProjectFieldMeta?
     @Published var discussionSetup: DiscussionSetup?
-    @Published var talkIssueNumber: Int = 1
+    @Published var discordLink: AccountLink?
     private var didRegisterPush = false
 
     private let flow: AuthFlow
+    private let discordFlow: DiscordLinkFlow
     private let cache: CacheStore
     private let tokens: KeychainTokenStore
     private let transport = URLSessionTransport()
@@ -67,15 +66,29 @@ final class AppModel: ObservableObject {
         )
         cache = try! CacheStore(path: cacheURL.path)
         tokens = KeychainTokenStore()
+        let bridge = AuthBridgeClient(baseURL: config.authBridgeBaseURL, transport: transport)
         flow = AuthFlow(
             config: config,
-            bridge: AuthBridgeClient(baseURL: config.authBridgeBaseURL, transport: transport),
+            bridge: bridge,
             membership: GitHubMembershipClient(transport: transport),
             tokens: tokens,
             cache: cache,
             pendingStore: UserDefaultsPendingLoginStore()
         )
+        discordFlow = DiscordLinkFlow(
+            config: DiscordAuthConfig(
+                clientID: Bundle.main.object(forInfoDictionaryKey: "DiscordClientID") as? String ?? "REPLACE_ME",
+                authBridgeBaseURL: config.authBridgeBaseURL
+            ),
+            bridge: bridge,
+            cache: cache,
+            pendingStore: UserDefaultsPendingLoginStore(
+                stateKey: "crewrp.discord.oauth.state",
+                verifierKey: "crewrp.discord.oauth.verifier"
+            )
+        )
         session = try? cache.session()
+        discordLink = try? discordFlow.linkedDiscord()
     }
 
     func login() {
@@ -87,6 +100,21 @@ final class AppModel: ObservableObject {
     }
 
     func handleOAuthCallback(_ url: URL) {
+        let isDiscordCallback =
+            (url.scheme?.hasPrefix("discord-") == true)
+            || (url.scheme == "crewrp" && (url.path.hasPrefix("/discord") || url.path == "/discord"))
+        if isDiscordCallback {
+            Task {
+                do {
+                    discordLink = try await discordFlow.completeLink(callbackURL: url)
+                    writeError = nil
+                } catch {
+                    log.error("discord link failed: \(String(describing: error), privacy: .public)")
+                    writeError = "Discord 연결에 실패했습니다. 잠시 후 다시 시도해 주세요."
+                }
+            }
+            return
+        }
         guard url.scheme == "crewrp" else { return }
         Task {
             do {
@@ -99,6 +127,17 @@ final class AppModel: ObservableObject {
                 errorMessage = authFailureMessage(describing: String(describing: error))
             }
         }
+    }
+
+    func linkDiscord() {
+        writeError = nil
+        let challenge = discordFlow.beginLink()
+        UIApplication.shared.open(challenge.authorizeURL)
+    }
+
+    func unlinkDiscord() {
+        try? discordFlow.unlink()
+        discordLink = nil
     }
 
     func register(_ repo: CrewRepo) {
@@ -124,7 +163,7 @@ final class AppModel: ObservableObject {
         docs = []
         docsTree = []
         docsDirPath = "docs"
-        threadMessages = []
+        discordLink = nil
         currentLogin = nil
         projectMeta = nil
         discussionSetup = nil
@@ -160,9 +199,6 @@ final class AppModel: ObservableObject {
             var docsTree: [DocEntry] = []
             var docsDirPath: String
             var docFailed = false
-            var talkIssueNumber = 1
-            var threadMessages: [ThreadMessage] = []
-            var threadsFailed = false
         }
 
         let snapshot = await Task.detached(priority: .userInitiated) { () -> Snapshot in
@@ -233,23 +269,9 @@ final class AppModel: ObservableObject {
                 return (entries, tree, listPath, folderFailed)
             }()
 
-            async let talkTask: (issue: Int, messages: [ThreadMessage], failed: Bool) = {
-                do {
-                    let talk = ThreadTalkClient(transport: transport)
-                    let issue = try await talk.ensureTalkIssueNumber(owner: owner, repo: repo, token: token)
-                    let messages = try await talk.listIssueComments(
-                        owner: owner, repo: repo, issueNumber: issue, token: token
-                    )
-                    return (issue, messages, false)
-                } catch {
-                    return (1, [], true)
-                }
-            }()
-
             let tasks = await tasksTask
             let notices = await noticesTask
             let docs = await docsTask
-            let talk = await talkTask
             return Snapshot(
                 login: await loginTask,
                 tasks: tasks.cards,
@@ -261,10 +283,7 @@ final class AppModel: ObservableObject {
                 docs: docs.entries,
                 docsTree: docs.tree,
                 docsDirPath: docs.dir,
-                docFailed: docs.failed,
-                talkIssueNumber: talk.issue,
-                threadMessages: talk.messages,
-                threadsFailed: talk.failed
+                docFailed: docs.failed
             )
         }.value
 
@@ -287,11 +306,6 @@ final class AppModel: ObservableObject {
             docsTree = snapshot.docsTree
         }
         docFailed = snapshot.docFailed
-        if !snapshot.threadsFailed || threadMessages.isEmpty {
-            talkIssueNumber = snapshot.talkIssueNumber
-            threadMessages = snapshot.threadMessages
-        }
-        threadsFailed = snapshot.threadsFailed
 
         if !didRegisterPush {
             didRegisterPush = true
@@ -449,40 +463,21 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func postTalk(_ body: String) async {
-        await withToken { token, owner, repo in
-            let talk = ThreadTalkClient(transport: transport)
-            let issue = try await talk.ensureTalkIssueNumber(owner: owner, repo: repo, token: token)
-            talkIssueNumber = issue
-            _ = try await talk.postComment(owner: owner, repo: repo, issueNumber: issue, body: body, token: token)
-        }
-    }
-
-    func updateTalk(_ message: ThreadMessage, body: String) async {
-        await withToken { token, owner, repo in
-            _ = try await ThreadTalkClient(transport: transport)
-                .updateComment(owner: owner, repo: repo, commentId: message.id, body: body, token: token)
-        }
-    }
-
-    func deleteTalk(_ message: ThreadMessage) async {
-        await withToken { token, owner, repo in
-            try await ThreadTalkClient(transport: transport)
-                .deleteComment(owner: owner, repo: repo, commentId: message.id, token: token)
-        }
-    }
-
-    func reactTalk(_ message: ThreadMessage) async {
-        await withToken { token, owner, repo in
-            try await ThreadTalkClient(transport: transport)
-                .addReaction(owner: owner, repo: repo, commentId: message.id, content: "+1", token: token)
-        }
-    }
-
     func openDiscord() {
         let server = Bundle.main.object(forInfoDictionaryKey: "DiscordServerID") as? String ?? "REPLACE_ME"
         let channel = Bundle.main.object(forInfoDictionaryKey: "DiscordChannelID") as? String ?? "REPLACE_ME"
         UIApplication.shared.open(DiscordDeepLink.voiceChannelURL(serverId: server, channelId: channel))
+    }
+
+    /// 소통 탭 진입: 연동·서버 설정이 있으면 Discord를 바로 연다. 미연동이면 OAuth 연결을 시작한다.
+    func enterTalk() {
+        let server = Bundle.main.object(forInfoDictionaryKey: "DiscordServerID") as? String ?? ""
+        let channel = Bundle.main.object(forInfoDictionaryKey: "DiscordChannelID") as? String ?? ""
+        if discordLink != nil, discordConfigured(serverId: server, channelId: channel) {
+            openDiscord()
+        } else if discordLink == nil {
+            linkDiscord()
+        }
     }
 
     func registerPushDevice() async {
@@ -526,6 +521,9 @@ struct RootView: View {
                 }
                 .tint(.crewInk)
                 .task { await model.refreshHomeData() }
+                .onChange(of: model.selectedTab) { _, tab in
+                    if tab == 3 { model.enterTalk() }
+                }
             } else if !model.registrableRepos.isEmpty {
                 NavigationStack {
                     List(model.registrableRepos) { repo in
@@ -1066,9 +1064,6 @@ private struct DocDetailSheet: View {
 
 private struct TalkTab: View {
     @ObservedObject var model: AppModel
-    @State private var draft = ""
-    @State private var editing: ThreadMessage?
-    @FocusState private var composerFocused: Bool
 
     private var discordReady: Bool {
         let server = Bundle.main.object(forInfoDictionaryKey: "DiscordServerID") as? String ?? ""
@@ -1076,101 +1071,40 @@ private struct TalkTab: View {
         return discordConfigured(serverId: server, channelId: channel)
     }
 
-    private func dismissComposer() {
-        composerFocused = false
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-    }
-
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
                 if let err = model.writeError {
-                    Text(err).font(.footnote).foregroundStyle(.red).padding(8)
+                    Text(err).font(.footnote).foregroundStyle(.red)
                 }
-                Group {
-                    if model.isLoading && model.threadMessages.isEmpty && !model.threadsFailed {
-                        ProgressView()
-                    } else if model.threadsFailed && model.threadMessages.isEmpty {
-                        FailedHint { await model.refreshHomeData(forceNetwork: true) }
-                    } else if model.threadMessages.isEmpty {
-                        EmptyHint(title: "스레드 톡이 없습니다", message: "아래에 메시지를 남겨 보세요.")
+                if let link = model.discordLink {
+                    Text("연결됨: @\(link.username)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    if discordReady {
+                        Button("바로 대화") { model.openDiscord() }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.crewInk)
+                            .controlSize(.large)
                     } else {
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(model.threadMessages, id: \.id) { message in
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(message.author).font(.caption).foregroundStyle(.secondary)
-                                        Text(message.body)
-                                            .padding(12)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
-                                        HStack {
-                                            Button("좋아요") { Task { await model.reactTalk(message) } }
-                                            if canMutate(role: model.session?.teamRole ?? .none, authorLogin: message.author, currentLogin: model.currentLogin) {
-                                                Button("수정") { editing = message }
-                                                Button("삭제", role: .destructive) { Task { await model.deleteTalk(message) } }
-                                            }
-                                        }
-                                        .font(.caption)
-                                    }
-                                }
-                            }
-                            .padding(16)
-                        }
-                        .scrollDismissesKeyboard(.immediately)
+                        Text("서버·채널 ID를 설정하면 바로 대화를 열 수 있습니다.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay {
-                    if composerFocused {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onTapGesture { dismissComposer() }
-                    }
-                }
-                HStack {
-                    TextField("메시지", text: $draft)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($composerFocused)
-                    Button("보내기") {
-                        let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !body.isEmpty else { return }
-                        draft = ""
-                        dismissComposer()
-                        Task { await model.postTalk(body) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.crewInk)
-                }
-                .padding(12)
-                if discordReady {
-                    Button("바로 대화") { model.openDiscord() }
+                    Button("Discord 연결 해제", role: .destructive) { model.unlinkDiscord() }
+                } else {
+                    Text("잡담과 음성은 Discord에서 이어갑니다.")
+                        .foregroundStyle(.secondary)
+                    Button("Discord 연결") { model.linkDiscord() }
                         .buttonStyle(.borderedProminent)
                         .tint(.crewInk)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 12)
+                        .controlSize(.large)
                 }
+                Spacer()
             }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .navigationTitle("소통")
-            .toolbar {
-                RefreshButton(model: model)
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("완료") { dismissComposer() }
-                }
-            }
-            .refreshable { await model.refreshHomeData(forceNetwork: true) }
-            .sheet(item: $editing) { message in
-                ComposeSheet(
-                    title: "메시지 수정",
-                    titleLabel: "작성자",
-                    bodyLabel: "본문",
-                    initialTitle: message.author,
-                    initialBody: message.body,
-                    titleEnabled: false,
-                    onSave: { _, body in Task { await model.updateTalk(message, body: body) } }
-                )
-            }
         }
     }
 }

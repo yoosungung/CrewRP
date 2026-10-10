@@ -89,18 +89,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.crewrp.CrewContent
+import app.crewrp.core.AccountLink
 import app.crewrp.core.CrewRepo
 import app.crewrp.core.DocBlock
+import app.crewrp.core.DocEntry
 import app.crewrp.core.Notice
 import app.crewrp.core.Session
 import app.crewrp.core.TaskCard
 import app.crewrp.core.TaskLane
 import app.crewrp.core.TeamRole
-import app.crewrp.core.ThreadMessage
 import app.crewrp.core.canMutate
 import app.crewrp.core.crewDisplayName
 import app.crewrp.core.crewOwnerName
-import app.crewrp.core.DocEntry
 import app.crewrp.core.docBlocks
 import app.crewrp.core.dueOnInput
 import app.crewrp.core.formatDue
@@ -128,10 +128,6 @@ data class CrewActions(
     val onDeleteDoc: () -> Unit,
     val onOpenDoc: (path: String) -> Unit,
     val onListDocs: (path: String) -> Unit,
-    val onPostTalk: (body: String) -> Unit,
-    val onUpdateTalk: (ThreadMessage, body: String) -> Unit,
-    val onDeleteTalk: (ThreadMessage) -> Unit,
-    val onReactTalk: (ThreadMessage) -> Unit,
 )
 
 private data class Destination(val label: String, val selectedIcon: ImageVector, val icon: ImageVector)
@@ -222,9 +218,12 @@ fun CrewStartScreen(
 fun CrewShell(
     session: Session,
     content: CrewContent,
+    discordLink: AccountLink?,
     discordEnabled: Boolean,
     actions: CrewActions,
     onRefresh: () -> Unit,
+    onLinkDiscord: () -> Unit,
+    onUnlinkDiscord: () -> Unit,
     onDiscord: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -232,10 +231,16 @@ fun CrewShell(
     var compose by remember { mutableStateOf<ComposeKind?>(null) }
     var editingNotice by remember { mutableStateOf<Notice?>(null) }
     var editingTask by remember { mutableStateOf<TaskCard?>(null) }
-    var editingTalk by remember { mutableStateOf<ThreadMessage?>(null) }
     var viewingDoc by remember { mutableStateOf(false) }
-    var talkDraft by remember { mutableStateOf("") }
     val name = crewDisplayName(session.repo)
+
+    LaunchedEffect(tab) {
+        if (tab != 3) return@LaunchedEffect
+        when {
+            discordLink != null && discordEnabled -> onDiscord()
+            discordLink == null -> onLinkDiscord()
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -299,24 +304,12 @@ fun CrewShell(
                     onOpenDetail = { viewingDoc = true },
                 )
                 else -> TalkTab(
-                    content,
-                    discordEnabled,
-                    talkDraft,
-                    { talkDraft = it },
-                    {
-                        if (talkDraft.isNotBlank()) {
-                            actions.onPostTalk(talkDraft.trim())
-                            talkDraft = ""
-                        }
-                    },
-                    Modifier.weight(1f),
-                    onRefresh,
-                    onDiscord,
-                    onEdit = { editingTalk = it },
-                    onDelete = actions.onDeleteTalk,
-                    onReact = actions.onReactTalk,
-                    role = session.teamRole,
-                    login = content.currentLogin,
+                    discordLink = discordLink,
+                    discordEnabled = discordEnabled,
+                    modifier = Modifier.weight(1f),
+                    onLink = onLinkDiscord,
+                    onUnlink = onUnlinkDiscord,
+                    onDiscord = onDiscord,
                 )
             }
         }
@@ -389,16 +382,6 @@ fun CrewShell(
                 editingTask = null
             },
             onDelete = { actions.onDeleteTask(task); editingTask = null },
-        )
-    }
-    editingTalk?.let { msg ->
-        FormDialog(
-            title = "메시지 수정",
-            initialTitle = msg.author,
-            titleEnabled = false,
-            initialBody = msg.body,
-            onDismiss = { editingTalk = null },
-            onSubmit = { _, b -> actions.onUpdateTalk(msg, b); editingTalk = null },
         )
     }
 }
@@ -871,52 +854,42 @@ private fun DocDetailDialog(
 
 @Composable
 private fun TalkTab(
-    content: CrewContent,
+    discordLink: AccountLink?,
     discordEnabled: Boolean,
-    draft: String,
-    onDraft: (String) -> Unit,
-    onSend: () -> Unit,
     modifier: Modifier,
-    onRetry: () -> Unit,
+    onLink: () -> Unit,
+    onUnlink: () -> Unit,
     onDiscord: () -> Unit,
-    onEdit: (ThreadMessage) -> Unit,
-    onDelete: (ThreadMessage) -> Unit,
-    onReact: (ThreadMessage) -> Unit,
-    role: TeamRole,
-    login: String?,
 ) {
-    Column(modifier.fillMaxSize()) {
-        when {
-            content.loading && content.threads.isEmpty() && !content.threadsFailed -> LoadingPane(Modifier.weight(1f))
-            content.threadsFailed && content.threads.isEmpty() -> FailedPane(Modifier.weight(1f), onRetry)
-            content.threads.isEmpty() -> EmptyPane(Modifier.weight(1f), "스레드 톡이 없습니다", "아래에 메시지를 남겨 보세요.")
-            else -> LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(content.threads, key = { it.id }) { msg ->
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(msg.author, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Surface(color = MaterialTheme.colorScheme.surface, shape = MaterialTheme.shapes.medium) {
-                            Text(msg.body, Modifier.padding(12.dp), style = MaterialTheme.typography.bodyLarge, lineHeight = 22.sp)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            TextButton(onClick = { onReact(msg) }) { Text("좋아요") }
-                            if (canMutate(role, msg.author, login)) {
-                                TextButton(onClick = { onEdit(msg) }) { Text("수정") }
-                                TextButton(onClick = { onDelete(msg) }) { Text("삭제") }
-                            }
-                        }
-                    }
-                }
+    Column(
+        modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        if (discordLink != null) {
+            Text(
+                "연결됨: @${discordLink.username}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (discordEnabled) {
+                Button(onClick = onDiscord, Modifier.fillMaxWidth()) { Text("바로 대화") }
+            } else {
+                Text(
+                    "서버·채널 ID를 설정하면 바로 대화를 열 수 있습니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-        }
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(draft, onDraft, modifier = Modifier.weight(1f), label = { Text("메시지") })
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = onSend) { Text("보내기") }
-        }
-        if (discordEnabled) {
-            Button(onClick = onDiscord, Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp)) {
-                Text("바로 대화")
-            }
+            TextButton(onClick = onUnlink) { Text("Discord 연결 해제") }
+        } else {
+            Text(
+                "잡담과 음성은 Discord에서 이어갑니다.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = onLink, Modifier.fillMaxWidth()) { Text("Discord 연결") }
         }
     }
 }

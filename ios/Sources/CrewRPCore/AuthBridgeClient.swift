@@ -37,6 +37,16 @@ public struct TokenExchangeResult: Sendable, Equatable, Codable {
     }
 }
 
+public struct DiscordIdentity: Sendable, Equatable, Codable {
+    public let id: String
+    public let username: String
+
+    public init(id: String, username: String) {
+        self.id = id
+        self.username = username
+    }
+}
+
 public enum AuthBridgeError: Error, Equatable {
     case invalidResponse
     case httpStatus(Int)
@@ -75,5 +85,30 @@ public struct AuthBridgeClient: Sendable {
             throw AuthBridgeError.githubError(error)
         }
         return try JSONDecoder().decode(TokenExchangeResult.self, from: data)
+    }
+
+    public func exchangeDiscord(
+        code: String,
+        codeVerifier: String,
+        redirectURI: String
+    ) async throws -> DiscordIdentity {
+        var request = URLRequest(url: baseURL.appending(path: "oauth/discord/token"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "code": code,
+            "code_verifier": codeVerifier,
+            "redirect_uri": redirectURI,
+        ])
+
+        let (data, response) = try await transport.data(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            throw AuthBridgeError.httpStatus(response.statusCode)
+        }
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = object["error"] as? String {
+            throw AuthBridgeError.githubError(error)
+        }
+        return try JSONDecoder().decode(DiscordIdentity.self, from: data)
     }
 }

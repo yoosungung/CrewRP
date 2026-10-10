@@ -55,3 +55,30 @@ public enum GitHubOAuth {
         return components.url!
     }
 }
+
+public enum DiscordOAuth {
+    /// Discord 모바일 OAuth redirect (`discord-{appId}:/authorize/callback`).
+    public static func mobileRedirectURI(clientID: String) -> String {
+        "discord-\(clientID):/authorize/callback"
+    }
+
+    public static func authorizeURL(
+        clientID: String,
+        redirectURI: String,
+        state: String,
+        codeChallenge: String,
+        scope: String = "identify"
+    ) -> URL {
+        var components = URLComponents(string: "https://discord.com/api/oauth2/authorize")!
+        components.queryItems = [
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "scope", value: scope),
+            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "code_challenge", value: codeChallenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+        ]
+        return components.url!
+    }
+}

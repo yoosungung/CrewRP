@@ -56,6 +56,7 @@ class AuthFlow(
         tokens.clearAccessToken()
         pendingStore.clear()
         cache.clearSession()
+        cache.clearAllAccountLinks()
     }
 }
 

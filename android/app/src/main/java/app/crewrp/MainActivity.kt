@@ -16,12 +16,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import app.crewrp.core.AccountLink
 import app.crewrp.core.AuthBridgeClient
 import app.crewrp.core.AuthConfig
 import app.crewrp.core.AuthFlow
 import app.crewrp.core.CacheStore
 import app.crewrp.core.CrewRepo
+import app.crewrp.core.DiscordAuthConfig
 import app.crewrp.core.DiscordDeepLink
+import app.crewrp.core.DiscordLinkFlow
 import app.crewrp.core.PendingLogin
 import app.crewrp.core.PendingLoginStore
 import app.crewrp.core.Session
@@ -73,14 +76,36 @@ class EncryptedPrefsTokenStore(context: Context) : TokenStore, PendingLoginStore
     override fun clear() {
         prefs.edit().remove("oauth_state").remove("oauth_verifier").apply()
     }
+
+    fun discordPending(): PendingLoginStore = object : PendingLoginStore {
+        override fun save(pending: PendingLogin) {
+            prefs.edit()
+                .putString("discord_oauth_state", pending.state)
+                .putString("discord_oauth_verifier", pending.codeVerifier)
+                .apply()
+        }
+
+        override fun load(): PendingLogin? {
+            val state = prefs.getString("discord_oauth_state", null) ?: return null
+            val verifier = prefs.getString("discord_oauth_verifier", null) ?: return null
+            return PendingLogin(state, verifier)
+        }
+
+        override fun clear() {
+            prefs.edit().remove("discord_oauth_state").remove("discord_oauth_verifier").apply()
+        }
+    }
 }
 
 class MainActivity : ComponentActivity() {
     private lateinit var flow: AuthFlow
+    private lateinit var discordFlow: DiscordLinkFlow
     private lateinit var tokens: EncryptedPrefsTokenStore
     private lateinit var cache: CacheStore
     private var onRepos: ((List<CrewRepo>) -> Unit)? = null
     private var onLoginError: ((String) -> Unit)? = null
+    private var onDiscordLinked: ((AccountLink) -> Unit)? = null
+    private var onDiscordLinkError: ((String) -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,13 +118,23 @@ class MainActivity : ComponentActivity() {
         )
         tokens = EncryptedPrefsTokenStore(this)
         cache = AndroidCacheStore(this)
+        val bridge = AuthBridgeClient(config.authBridgeBaseUrl, transport)
         flow = AuthFlow(
             config,
-            AuthBridgeClient(config.authBridgeBaseUrl, transport),
+            bridge,
             app.crewrp.core.GitHubMembershipClient(transport),
             tokens,
             cache,
             tokens,
+        )
+        discordFlow = DiscordLinkFlow(
+            DiscordAuthConfig(
+                clientId = BuildConfig.DISCORD_CLIENT_ID,
+                authBridgeBaseUrl = config.authBridgeBaseUrl,
+            ),
+            bridge,
+            cache,
+            tokens.discordPending(),
         )
 
         setContent {
@@ -107,6 +142,7 @@ class MainActivity : ComponentActivity() {
             var session by remember { mutableStateOf(cache.session()) }
             var error by remember { mutableStateOf<String?>(null) }
             var content by remember { mutableStateOf(CrewContent(loading = session != null)) }
+            var discordLink by remember { mutableStateOf(discordFlow.linkedDiscord()) }
             var refreshTick by remember { mutableIntStateOf(0) }
             var loadId by remember { mutableIntStateOf(0) }
             var deviceRegistered by remember { mutableStateOf(false) }
@@ -115,6 +151,10 @@ class MainActivity : ComponentActivity() {
                 error = if (it.isEmpty()) "운영 권한이 있는 보관소가 없습니다." else null
             }
             onLoginError = { error = it }
+            onDiscordLinked = { discordLink = it }
+            onDiscordLinkError = { msg ->
+                content = content.copy(writeError = msg)
+            }
 
             val active = session
             LaunchedEffect(active?.repo, refreshTick) {
@@ -124,7 +164,6 @@ class MainActivity : ComponentActivity() {
                     content = CrewContent(
                         tasksFailed = true,
                         noticesFailed = true,
-                        threadsFailed = true,
                         docFailed = true,
                     )
                     return@LaunchedEffect
@@ -147,7 +186,6 @@ class MainActivity : ComponentActivity() {
                         content = loaded.copy(
                             tasks = if (loaded.tasksFailed && previous.tasks.isNotEmpty()) previous.tasks else loaded.tasks,
                             notices = if (loaded.noticesFailed && previous.notices.isNotEmpty()) previous.notices else loaded.notices,
-                            threads = if (loaded.threadsFailed && previous.threads.isNotEmpty()) previous.threads else loaded.threads,
                             docs = if (loaded.docFailed && previous.docs.isNotEmpty()) previous.docs else loaded.docs,
                             docsTree = if (loaded.docFailed && previous.docsTree.isNotEmpty()) previous.docsTree else loaded.docsTree,
                             docsDirPath = if (loaded.docFailed && previous.docs.isNotEmpty()) previous.docsDirPath else loaded.docsDirPath,
@@ -196,6 +234,7 @@ class MainActivity : ComponentActivity() {
                         CrewShell(
                             session = active,
                             content = content,
+                            discordLink = discordLink,
                             discordEnabled = discordConfigured(
                                 BuildConfig.DISCORD_SERVER_ID,
                                 BuildConfig.DISCORD_CHANNEL_ID,
@@ -256,12 +295,21 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 },
-                                onPostTalk = { body -> runWrite { it.postTalk(body) } },
-                                onUpdateTalk = { msg, body -> runWrite { it.updateTalk(msg.id, body) } },
-                                onDeleteTalk = { msg -> runWrite { it.deleteTalk(msg.id) } },
-                                onReactTalk = { msg -> runWrite { it.reactTalk(msg.id) } },
                             ),
                             onRefresh = { refreshTick += 1 },
+                            onLinkDiscord = {
+                                content = content.copy(writeError = null)
+                                val challenge = discordFlow.beginLink()
+                                startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(challenge.authorizeUrl)).apply {
+                                        addCategory(Intent.CATEGORY_BROWSABLE)
+                                    },
+                                )
+                            },
+                            onUnlinkDiscord = {
+                                discordFlow.unlink()
+                                discordLink = null
+                            },
                             onDiscord = {
                                 val url = DiscordDeepLink.voiceChannelUrl(
                                     BuildConfig.DISCORD_SERVER_ID,
@@ -274,6 +322,7 @@ class MainActivity : ComponentActivity() {
                                 session = null
                                 repos = emptyList()
                                 content = CrewContent()
+                                discordLink = null
                                 error = null
                                 deviceRegistered = false
                             },
@@ -334,17 +383,33 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         val data = intent?.data?.toString() ?: return
-        if (!data.startsWith("crewrp://oauth/callback")) return
-        intent.data = null
-        thread {
-            runCatching { flow.completeLogin(data) }
-                .onSuccess { repos -> runOnUiThread { onRepos?.invoke(repos) } }
-                .onFailure { err ->
-                    Log.e("CrewRP", "oauth complete failed", err)
-                    runOnUiThread {
-                        onLoginError?.invoke("로그인에 실패했습니다. 잠시 후 다시 시도해 주세요.")
-                    }
+        when {
+            data.startsWith("discord-") || data.startsWith("crewrp://oauth/discord") -> {
+                intent.data = null
+                thread {
+                    runCatching { discordFlow.completeLink(data) }
+                        .onSuccess { link -> runOnUiThread { onDiscordLinked?.invoke(link) } }
+                        .onFailure { err ->
+                            Log.e("CrewRP", "discord link failed", err)
+                            runOnUiThread {
+                                onDiscordLinkError?.invoke("Discord 연결에 실패했습니다. 잠시 후 다시 시도해 주세요.")
+                            }
+                        }
                 }
+            }
+            data.startsWith("crewrp://oauth/callback") -> {
+                intent.data = null
+                thread {
+                    runCatching { flow.completeLogin(data) }
+                        .onSuccess { repos -> runOnUiThread { onRepos?.invoke(repos) } }
+                        .onFailure { err ->
+                            Log.e("CrewRP", "oauth complete failed", err)
+                            runOnUiThread {
+                                onLoginError?.invoke("로그인에 실패했습니다. 잠시 후 다시 시도해 주세요.")
+                            }
+                        }
+                }
+            }
         }
     }
 }

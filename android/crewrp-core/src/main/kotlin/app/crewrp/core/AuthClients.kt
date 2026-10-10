@@ -55,6 +55,12 @@ data class TokenExchangeResult(
     val scope: String? = null,
 )
 
+@Serializable
+data class DiscordIdentity(
+    val id: String,
+    val username: String,
+)
+
 class AuthBridgeClient(
     private val baseUrl: String,
     private val transport: HttpTransport,
@@ -75,6 +81,23 @@ class AuthBridgeClient(
             error("auth-bridge github error: ${result.body}")
         }
         return json.decodeFromString(TokenExchangeResult.serializer(), result.body)
+    }
+
+    fun exchangeDiscord(code: String, codeVerifier: String, redirectUri: String): DiscordIdentity {
+        val body = """{"code":"$code","code_verifier":"$codeVerifier","redirect_uri":"$redirectUri"}"""
+        val result = transport.exchange(
+            method = "POST",
+            url = baseUrl.trimEnd('/') + "/oauth/discord/token",
+            headers = mapOf("Content-Type" to "application/json"),
+            body = body,
+        )
+        if (result.status !in 200..299) {
+            error("auth-bridge http ${result.status}")
+        }
+        if ("\"error\"" in result.body) {
+            error("auth-bridge discord error: ${result.body}")
+        }
+        return json.decodeFromString(DiscordIdentity.serializer(), result.body)
     }
 }
 

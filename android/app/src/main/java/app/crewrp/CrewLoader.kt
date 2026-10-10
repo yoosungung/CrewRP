@@ -13,8 +13,6 @@ import app.crewrp.core.ProjectFieldMeta
 import app.crewrp.core.ProjectsClient
 import app.crewrp.core.Session
 import app.crewrp.core.TaskCard
-import app.crewrp.core.ThreadMessage
-import app.crewrp.core.ThreadTalkClient
 import app.crewrp.core.UrlHttpTransport
 import app.crewrp.core.taskLane
 import java.util.concurrent.Callable
@@ -26,8 +24,6 @@ data class CrewContent(
     val tasksFailed: Boolean = false,
     val notices: List<Notice> = emptyList(),
     val noticesFailed: Boolean = false,
-    val threads: List<ThreadMessage> = emptyList(),
-    val threadsFailed: Boolean = false,
     val docs: List<DocEntry> = emptyList(),
     val docsTree: List<DocEntry> = emptyList(),
     val docsDirPath: String = "docs",
@@ -58,7 +54,6 @@ fun fetchCrewContent(
     val (owner, repo) = parts(session) ?: return CrewContent(
         tasksFailed = true,
         noticesFailed = true,
-        threadsFailed = true,
         docFailed = true,
     )
     val transport = UrlHttpTransport()
@@ -98,14 +93,6 @@ fun fetchCrewContent(
                 Triple(notices.getOrDefault(emptyList()), notices.isFailure, setup.getOrNull())
             },
         )
-        val talkF: Future<Pair<List<ThreadMessage>, Boolean>> = pool.submit(
-            Callable {
-                val talkClient = ThreadTalkClient(transport)
-                val talkIssue = runCatching { talkClient.ensureTalkIssueNumber(owner, repo, token) }
-                val threads = talkIssue.mapCatching { n -> talkClient.listIssueComments(owner, repo, n, token) }
-                threads.getOrDefault(emptyList()) to threads.isFailure
-            },
-        )
         val docsF: Future<DocsBundle> = pool.submit(
             Callable {
                 val docsClient = DocsClient(transport, cache)
@@ -124,15 +111,12 @@ fun fetchCrewContent(
 
         val tasks = tasksF.get()
         val notices = noticesF.get()
-        val talk = talkF.get()
         val docs = docsF.get()
         return CrewContent(
             tasks = tasks.first,
             tasksFailed = tasks.second,
             notices = notices.first,
             noticesFailed = notices.second,
-            threads = talk.first,
-            threadsFailed = talk.second,
             docs = docs.entries,
             docsTree = docs.tree,
             docsDirPath = docs.dirPath,
@@ -221,19 +205,4 @@ class CrewWriter(
 
     fun listDocs(path: String): List<DocEntry> =
         DocsClient(transport, cache).listDocs(owner, repo, token, path)
-
-    fun postTalk(body: String): ThreadMessage {
-        val talk = ThreadTalkClient(transport)
-        val issue = talk.ensureTalkIssueNumber(owner, repo, token)
-        return talk.postComment(owner, repo, issue, body, token)
-    }
-
-    fun updateTalk(id: String, body: String): ThreadMessage =
-        ThreadTalkClient(transport).updateComment(owner, repo, id, body, token)
-
-    fun deleteTalk(id: String) =
-        ThreadTalkClient(transport).deleteComment(owner, repo, id, token)
-
-    fun reactTalk(id: String) =
-        ThreadTalkClient(transport).addReaction(owner, repo, id, "+1", token)
 }

@@ -120,5 +120,6 @@ public final class AuthFlow: @unchecked Sendable {
         try tokens.clearAccessToken()
         try pendingStore.clear()
         try cache.clearSession()
+        try cache.clearAllAccountLinks()
     }
 }

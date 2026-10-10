@@ -89,6 +89,18 @@ class CacheStoreTest {
             assertEquals(TeamRole.MEMBER, session?.teamRole)
         }
     }
+
+    @Test
+    fun storesDiscordAccountLinkWithoutToken() {
+        JdbcCacheStore(":memory:").use { store ->
+            store.putAccountLink(AccountLink(AccountLink.DISCORD, "99", "crewmate", Instant.ofEpochSecond(50)))
+            val link = store.accountLink(AccountLink.DISCORD)
+            assertEquals("99", link?.userId)
+            assertEquals("crewmate", link?.username)
+            store.clearAccountLink(AccountLink.DISCORD)
+            assertEquals(null, store.accountLink(AccountLink.DISCORD))
+        }
+    }
 }
 
 class ETagRESTClientTest {
@@ -154,6 +166,46 @@ class AuthBridgeClientTest {
         }
         val client = AuthBridgeClient("https://auth.example", transport)
         assertEquals("gho_ok", client.exchange("abc", "ver", "crewrp://oauth/callback").accessToken)
+    }
+
+    @Test
+    fun exchangesDiscordIdentity() {
+        val transport = HttpTransport { method, url, _, _ ->
+            assertEquals("POST", method)
+            assertTrue(url.endsWith("/oauth/discord/token"))
+            HttpResult(200, """{"id":"99","username":"crewmate"}""")
+        }
+        val client = AuthBridgeClient("https://auth.example", transport)
+        val id = client.exchangeDiscord("abc", "ver", "discord-dcid:/authorize/callback")
+        assertEquals("99", id.id)
+        assertEquals("crewmate", id.username)
+    }
+}
+
+class DiscordLinkFlowTest {
+    @Test
+    fun linkAndUnlink() {
+        val transport = HttpTransport { _, url, _, _ ->
+            assertTrue(url.endsWith("/oauth/discord/token"))
+            HttpResult(200, """{"id":"99","username":"crewmate"}""")
+        }
+        JdbcCacheStore(":memory:").use { cache ->
+            val pending = InMemoryPendingLoginStore()
+            val flow = DiscordLinkFlow(
+                DiscordAuthConfig("dcid", authBridgeBaseUrl = "https://auth.example"),
+                AuthBridgeClient("https://auth.example", transport),
+                cache,
+                pending,
+            )
+            val challenge = flow.beginLink()
+            assertTrue(challenge.authorizeUrl.startsWith("https://discord.com/api/oauth2/authorize?"))
+            assertTrue(challenge.authorizeUrl.contains("discord-dcid"))
+            val link = flow.completeLink("discord-dcid:/authorize/callback?code=x&state=${challenge.state}")
+            assertEquals("99", link.userId)
+            assertEquals("crewmate", flow.linkedDiscord()?.username)
+            flow.unlink()
+            assertEquals(null, flow.linkedDiscord())
+        }
     }
 }
 
@@ -287,10 +339,12 @@ class AuthFlowTest {
             val repos = flow.completeLogin("crewrp://oauth/callback?code=x&state=${challenge.state}")
             flow.registerCrew(repos[0])
             flow.beginLogin()
+            cache.putAccountLink(AccountLink(AccountLink.DISCORD, "1", "x"))
             flow.logout()
             assertEquals(null, tokens.loadAccessToken())
             assertEquals(null, cache.session())
             assertEquals(null, pending.load())
+            assertEquals(null, cache.accountLink(AccountLink.DISCORD))
         }
     }
 

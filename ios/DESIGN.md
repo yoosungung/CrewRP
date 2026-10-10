@@ -41,7 +41,9 @@ CREWRP_E2E_TOKEN=… CREWRP_E2E_REPO=owner/repo ../scripts/e2e-crud.sh
 - 공지·할 일·자료실·소통은 앱에서 CRUD한다. 탭의 `+`로 작성, 항목으로 상세·수정·삭제. 운영진은 전 항목, 멤버는 본인 작성분만 수정·삭제.
 - 자료실은 목록(파일·폴더) → 시트 상세(렌더·편집·삭제). `listDocs(path:)`로 폴더 드릴다운·상위 복귀. 검색어가 있으면 `listDocsTree` 재귀 인덱스에서 이름·경로 필터(폴더 안 파일 포함). compact에서 목록+본문 split을 쓰지 않는다.
 - OAuth scope는 `read:org repo project`. Projects v2 쓰기는 `project`가 필요하므로 스코프 변경 후에는 재로그인한다.
-- 스레드 톡은 제목 `스레드 톡` Issue(없으면 `#1`, 그것도 없으면 생성)의 댓글이다.
+- 소통 탭은 Discord다. 탭 선택 시 연동·서버 설정이 있으면 딥링크를 바로 열고, 미연동이면 OAuth 연결을 시작한다. Issue 말풍선은 소통 본체가 아니다. 홈 새로고침에서 Issue 톡 API를 호출하지 않는다.
+- Discord 연동은 `account_link`에 user id·표시 이름만 두고, Discord 액세스 토큰은 보관하지 않는다. 앱 로그아웃 시 연동도 지운다.
+- `Info.plist`: `DiscordClientID`(OAuth), `DiscordServerID` / `DiscordChannelID`(딥링크).
 - 홈·크루 시작 화면 상단에 **로그아웃**이 있다. 토큰·대기 OAuth·세션을 지우고 로그인 화면으로 돌아간다.
 - 로그인은 외부 Safari(`UIApplication.open`) + `crewrp://` 콜백이다. PKCE pending은 UserDefaults. 액세스 토큰은 Keychain 우선, entitlement 없으면 UserDefaults 폴백(폴백이 있으면 Keychain보다 우선). HTTP는 ephemeral URLSession.
 - `CacheStore`(SQLite)는 락 + FULLMUTEX로 직렬화하고, 손상 시 파일을 지우고 다시 연다. ETag 캐시 쓰기는 best-effort라 캐시 실패로 자료실 로드가 깨지지 않는다.

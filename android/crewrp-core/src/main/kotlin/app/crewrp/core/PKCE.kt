@@ -53,3 +53,34 @@ object GitHubOAuth {
     private fun encode(value: String): String =
         java.net.URLEncoder.encode(value, Charsets.UTF_8)
 }
+
+object DiscordOAuth {
+    /** Discord mobile OAuth redirect (`discord-{appId}:/authorize/callback`). */
+    fun mobileRedirectUri(clientId: String): String =
+        "discord-$clientId:/authorize/callback"
+
+    fun authorizeUrl(
+        clientId: String,
+        redirectUri: String,
+        state: String,
+        codeChallenge: String,
+        scope: String = "identify",
+    ): String {
+        val params = linkedMapOf(
+            "client_id" to clientId,
+            "redirect_uri" to redirectUri,
+            "response_type" to "code",
+            "scope" to scope,
+            "state" to state,
+            "code_challenge" to codeChallenge,
+            "code_challenge_method" to "S256",
+        )
+        val query = params.entries.joinToString("&") { (k, v) ->
+            "${encode(k)}=${encode(v)}"
+        }
+        return "https://discord.com/api/oauth2/authorize?$query"
+    }
+
+    private fun encode(value: String): String =
+        java.net.URLEncoder.encode(value, Charsets.UTF_8)
+}

@@ -3,6 +3,7 @@ package app.crewrp
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import app.crewrp.core.AccountLink
 import app.crewrp.core.CacheEntry
 import app.crewrp.core.CacheStore
 import app.crewrp.core.GraphQLCursorRow
@@ -77,11 +78,41 @@ class AndroidCacheStore(context: Context) : CacheStore {
         db.execSQL("DELETE FROM session WHERE id = 1")
     }
 
+    override fun putAccountLink(link: AccountLink) {
+        db.execSQL(
+            "INSERT OR REPLACE INTO account_link(provider, user_id, username, linked_at) VALUES (?, ?, ?, ?)",
+            arrayOf(link.provider, link.userId, link.username, link.linkedAt.epochSecond.toDouble()),
+        )
+    }
+
+    override fun accountLink(provider: String): AccountLink? {
+        db.rawQuery(
+            "SELECT provider, user_id, username, linked_at FROM account_link WHERE provider = ?",
+            arrayOf(provider),
+        ).use { c ->
+            if (!c.moveToFirst()) return null
+            return AccountLink(
+                provider = c.getString(0),
+                userId = c.getString(1),
+                username = c.getString(2),
+                linkedAt = Instant.ofEpochSecond(c.getDouble(3).toLong()),
+            )
+        }
+    }
+
+    override fun clearAccountLink(provider: String) {
+        db.execSQL("DELETE FROM account_link WHERE provider = ?", arrayOf(provider))
+    }
+
+    override fun clearAllAccountLinks() {
+        db.execSQL("DELETE FROM account_link")
+    }
+
     override fun close() {
         helper.close()
     }
 
-    private class Helper(context: Context) : SQLiteOpenHelper(context, "crewrp.sqlite", null, 1) {
+    private class Helper(context: Context) : SQLiteOpenHelper(context, "crewrp.sqlite", null, 2) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL(
                 """
@@ -112,8 +143,31 @@ class AndroidCacheStore(context: Context) : CacheStore {
                 );
                 """.trimIndent(),
             )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS account_link (
+                  provider TEXT PRIMARY KEY NOT NULL,
+                  user_id TEXT NOT NULL,
+                  username TEXT NOT NULL,
+                  linked_at REAL NOT NULL
+                );
+                """.trimIndent(),
+            )
         }
 
-        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            if (oldVersion < 2) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS account_link (
+                      provider TEXT PRIMARY KEY NOT NULL,
+                      user_id TEXT NOT NULL,
+                      username TEXT NOT NULL,
+                      linked_at REAL NOT NULL
+                    );
+                    """.trimIndent(),
+                )
+            }
+        }
     }
 }

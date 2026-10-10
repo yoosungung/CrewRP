@@ -14,6 +14,22 @@ public struct GraphQLCursorRow: Sendable, Equatable {
     public let updatedAt: Date
 }
 
+public struct AccountLink: Sendable, Equatable {
+    public let provider: String
+    public let userId: String
+    public let username: String
+    public let linkedAt: Date
+
+    public init(provider: String, userId: String, username: String, linkedAt: Date = Date()) {
+        self.provider = provider
+        self.userId = userId
+        self.username = username
+        self.linkedAt = linkedAt
+    }
+
+    public static let discordProvider = "discord"
+}
+
 public final class CacheStore: @unchecked Sendable {
     private var db: OpaquePointer?
     private let path: String
@@ -125,6 +141,59 @@ public final class CacheStore: @unchecked Sendable {
         }
     }
 
+    public func putAccountLink(_ link: AccountLink) throws {
+        try withLock {
+            try exec(
+                "INSERT OR REPLACE INTO account_link(provider, user_id, username, linked_at) VALUES (?, ?, ?, ?);",
+                binders: [
+                    .text(link.provider),
+                    .text(link.userId),
+                    .text(link.username),
+                    .double(link.linkedAt.timeIntervalSince1970),
+                ]
+            )
+        }
+    }
+
+    public func accountLink(provider: String) throws -> AccountLink? {
+        try withLock {
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_prepare_v2(
+                db,
+                "SELECT provider, user_id, username, linked_at FROM account_link WHERE provider = ?;",
+                -1,
+                &statement,
+                nil
+            ) == SQLITE_OK else {
+                throw CacheStoreError.prepareFailed
+            }
+            sqlite3_bind_text(statement, 1, provider, -1, SQLITE_TRANSIENT)
+            guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+            return AccountLink(
+                provider: String(cString: sqlite3_column_text(statement, 0)),
+                userId: String(cString: sqlite3_column_text(statement, 1)),
+                username: String(cString: sqlite3_column_text(statement, 2)),
+                linkedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
+            )
+        }
+    }
+
+    public func clearAccountLink(provider: String) throws {
+        try withLock {
+            try exec(
+                "DELETE FROM account_link WHERE provider = ?;",
+                binders: [.text(provider)]
+            )
+        }
+    }
+
+    public func clearAllAccountLinks() throws {
+        try withLock {
+            try exec("DELETE FROM account_link;")
+        }
+    }
+
     private func withLock<T>(_ body: () throws -> T) throws -> T {
         lock.lock()
         defer { lock.unlock() }
@@ -159,6 +228,12 @@ public final class CacheStore: @unchecked Sendable {
           org TEXT NOT NULL,
           repo TEXT NOT NULL,
           team_role TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS account_link (
+          provider TEXT PRIMARY KEY NOT NULL,
+          user_id TEXT NOT NULL,
+          username TEXT NOT NULL,
+          linked_at REAL NOT NULL
         );
         """)
     }

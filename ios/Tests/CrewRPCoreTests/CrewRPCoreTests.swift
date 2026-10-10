@@ -90,6 +90,17 @@ struct CacheStoreTests {
         #expect(session?.repo == "crew/box")
         #expect(session?.teamRole == .member)
     }
+
+    @Test("stores discord account link without token")
+    func accountLink() throws {
+        let store = try CacheStore(path: ":memory:")
+        try store.putAccountLink(AccountLink(provider: AccountLink.discordProvider, userId: "99", username: "crewmate", linkedAt: Date(timeIntervalSince1970: 50)))
+        let link = try store.accountLink(provider: AccountLink.discordProvider)
+        #expect(link?.userId == "99")
+        #expect(link?.username == "crewmate")
+        try store.clearAccountLink(provider: AccountLink.discordProvider)
+        #expect(try store.accountLink(provider: AccountLink.discordProvider) == nil)
+    }
 }
 
 final class MockHTTPTransport: HTTPTransport, @unchecked Sendable {
@@ -302,10 +313,45 @@ struct AuthFlowTests {
         _ = try await flow.completeLogin(callbackURL: URL(string: "crewrp://oauth/callback?code=x&state=\(challenge.state)")!)
         _ = try await flow.registerCrew(CrewRepo(owner: "crew", name: "box", fullName: "crew/box", isPrivate: true))
         _ = flow.beginLogin()
+        try cache.putAccountLink(AccountLink(provider: AccountLink.discordProvider, userId: "1", username: "x"))
         try flow.logout()
         #expect(try tokens.loadAccessToken() == nil)
         #expect(try cache.session() == nil)
         #expect(try pending.load() == nil)
+        #expect(try cache.accountLink(provider: AccountLink.discordProvider) == nil)
+    }
+}
+
+@Suite("DiscordLinkFlow")
+struct DiscordLinkFlowTests {
+    @Test("links discord identity via bridge")
+    func linkAndUnlink() async throws {
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            #expect(request.url!.path.hasSuffix("/oauth/discord/token"))
+            return (
+                Data(#"{"id":"99","username":"crewmate"}"#.utf8),
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            )
+        }
+        let cache = try CacheStore(path: ":memory:")
+        let pending = InMemoryPendingLoginStore()
+        let flow = DiscordLinkFlow(
+            config: DiscordAuthConfig(clientID: "dcid", authBridgeBaseURL: URL(string: "https://auth.example")!),
+            bridge: AuthBridgeClient(baseURL: URL(string: "https://auth.example")!, transport: transport),
+            cache: cache,
+            pendingStore: pending
+        )
+        let challenge = flow.beginLink()
+        #expect(challenge.authorizeURL.absoluteString.contains("discord.com/api/oauth2/authorize"))
+        #expect(challenge.authorizeURL.absoluteString.contains("discord-dcid"))
+        let link = try await flow.completeLink(
+            callbackURL: URL(string: "discord-dcid:/authorize/callback?code=x&state=\(challenge.state)")!
+        )
+        #expect(link.userId == "99")
+        #expect(try flow.linkedDiscord()?.username == "crewmate")
+        try flow.unlink()
+        #expect(try flow.linkedDiscord() == nil)
     }
 }
 

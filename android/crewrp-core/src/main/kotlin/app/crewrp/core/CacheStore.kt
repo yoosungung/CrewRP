@@ -16,6 +16,17 @@ data class GraphQLCursorRow(
     val updatedAt: Instant,
 )
 
+data class AccountLink(
+    val provider: String,
+    val userId: String,
+    val username: String,
+    val linkedAt: Instant = Instant.now(),
+) {
+    companion object {
+        const val DISCORD = "discord"
+    }
+}
+
 interface CacheStore : AutoCloseable {
     fun putCacheEntry(url: String, body: String, etag: String?, fetchedAt: Instant = Instant.now())
     fun cacheEntry(url: String): CacheEntry?
@@ -24,6 +35,10 @@ interface CacheStore : AutoCloseable {
     fun putSession(session: Session)
     fun session(): Session?
     fun clearSession()
+    fun putAccountLink(link: AccountLink)
+    fun accountLink(provider: String): AccountLink?
+    fun clearAccountLink(provider: String)
+    fun clearAllAccountLinks()
 }
 
 /** JVM / unit-test store (sqlite-jdbc). Not for Android runtime. */
@@ -56,6 +71,16 @@ class JdbcCacheStore(path: String) : CacheStore {
                   org TEXT NOT NULL,
                   repo TEXT NOT NULL,
                   team_role TEXT NOT NULL
+                );
+                """.trimIndent(),
+            )
+            st.execute(
+                """
+                CREATE TABLE IF NOT EXISTS account_link (
+                  provider TEXT PRIMARY KEY NOT NULL,
+                  user_id TEXT NOT NULL,
+                  username TEXT NOT NULL,
+                  linked_at REAL NOT NULL
                 );
                 """.trimIndent(),
             )
@@ -147,6 +172,46 @@ class JdbcCacheStore(path: String) : CacheStore {
 
     override fun clearSession() {
         connection.prepareStatement("DELETE FROM session WHERE id = 1").use { it.executeUpdate() }
+    }
+
+    override fun putAccountLink(link: AccountLink) {
+        connection.prepareStatement(
+            "INSERT OR REPLACE INTO account_link(provider, user_id, username, linked_at) VALUES (?, ?, ?, ?)",
+        ).use { ps ->
+            ps.setString(1, link.provider)
+            ps.setString(2, link.userId)
+            ps.setString(3, link.username)
+            ps.setDouble(4, link.linkedAt.epochSecond.toDouble())
+            ps.executeUpdate()
+        }
+    }
+
+    override fun accountLink(provider: String): AccountLink? {
+        connection.prepareStatement(
+            "SELECT provider, user_id, username, linked_at FROM account_link WHERE provider = ?",
+        ).use { ps ->
+            ps.setString(1, provider)
+            ps.executeQuery().use { rs ->
+                if (!rs.next()) return null
+                return AccountLink(
+                    provider = rs.getString(1),
+                    userId = rs.getString(2),
+                    username = rs.getString(3),
+                    linkedAt = Instant.ofEpochSecond(rs.getDouble(4).toLong()),
+                )
+            }
+        }
+    }
+
+    override fun clearAccountLink(provider: String) {
+        connection.prepareStatement("DELETE FROM account_link WHERE provider = ?").use { ps ->
+            ps.setString(1, provider)
+            ps.executeUpdate()
+        }
+    }
+
+    override fun clearAllAccountLinks() {
+        connection.prepareStatement("DELETE FROM account_link").use { it.executeUpdate() }
     }
 
     override fun close() {

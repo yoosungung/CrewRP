@@ -10,12 +10,13 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 - **소유(크루 시작)는 계정당 최대 1개.** 로그인한 사용자가 admin인 private 저장소를 골라 등록하면 그 사람이 해당 크루 운영진(owner)이 된다. 이미 owner인 크루가 있으면 새 등록을 막고, 기존 소유를 넘기거나 해제한 뒤에만 다시 등록한다.
 - **가입(멤버)은 여러 개.** 이메일 초대로 들어온 크루는 제한 없이 가질 수 있고, 앱에서 활성 크루를 바꿔 가며 본다.
 - 멤버 구성: 운영진이 **이메일**로 Organization 초대를 보낸다. 따라서 크루 보관소는 GitHub Free Organization 소속 private repository여야 한다. Team slug는 `admins`(운영진) / `members`(멤버).
-- 화면 문구에 Git, Commit, PR, Issue, Discussion을 노출하지 않는다. 사용자 용어는 자료실, 할 일, 공지, 서식, 스레드 톡, 크루 시작, 초대다.
-- 앱 바이너리에 OAuth client secret과 GitHub App private key를 넣지 않는다. 로그인은 시스템 브라우저와 Authorization Code + PKCE(S256)다. 액세스 토큰은 iOS Keychain, Android EncryptedSharedPreferences에만 둔다.
-- GitHub 토큰 엔드포인트는 `client_secret`을 요구한다. 시크릿은 `auth-bridge` Cloudflare Worker에만 두고, 앱은 코드·verifier를 Worker에 넘겨 교환한다. 사용자 토큰은 Worker에 저장하지 않는다.
+- 화면 문구에 Git, Commit, PR, Issue, Discussion을 노출하지 않는다. 사용자 용어는 자료실, 할 일, 공지, 서식, 소통, 크루 시작, 초대다.
+- 앱 바이너리에 OAuth client secret과 GitHub App / Discord client secret을 넣지 않는다. 로그인은 시스템 브라우저와 Authorization Code + PKCE(S256)다. GitHub 액세스 토큰은 iOS Keychain, Android EncryptedSharedPreferences에만 둔다.
+- GitHub·Discord 토큰 엔드포인트는 `client_secret`을 요구한다. 시크릿은 `auth-bridge` Cloudflare Worker에만 두고, 앱은 코드·verifier를 Worker에 넘겨 교환한다. 사용자 토큰은 Worker에 저장하지 않는다.
+- **계정:** CrewRP 신원은 GitHub 로그인으로 만든다. Discord는 **선택 연동**(identify). GitHub 토큰으로 Discord API에 로그인하지 않는다. 연동 결과는 기기에 `discord_user_id`·표시 이름만 둔다(Discord 액세스 토큰은 연동 직후 폐기).
 - GitHub, Cloudflare, Firebase의 결제 한도는 $0이며, 포함 한도를 넘기면 사용을 멈춘다. 포함 한도는 §5와 같다.
 - 의결, 회계, 문서의 감사 추적은 GitHub에 남긴다. 로컬 SQLite는 캐시이며 원본이 아니다.
-- 실시간 채팅 엔진을 두지 않는다. 스레드 톡은 댓글과 Reaction의 말풍선 뷰다. 음성과 잡담은 Discord 딥링크만 사용한다.
+- 실시간 채팅 엔진을 두지 않는다. **소통(잡담·음성)은 Discord 딥링크**다. Issue 댓글 말풍선은 소통 탭의 본체가 아니다(할 일별 업무 대화는 별도).
 - 본문에 넣는 파일은 Releases Assets로만 업로드한다. 비공식 업로드 엔드포인트는 계약이 아니다.
 
 ## 2. 크루 리소스
@@ -45,21 +46,31 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` | 폴더 목록·본문은 REST Contents. 검색 인덱스는 Git Trees `recursive=1`(경로 `docs/` 필터). 마크다운은 앱이 렌더 |
 | 첨부 파일 | 첨부 | Releases Assets | REST. 파일당 100MB 이상 2GB 이하. 본문에는 asset URL만 삽입 |
 | 정기 과업 | 자동 업무 | Actions | `workflow_dispatch` 또는 cron. private repository 포함 분(分) 안에서만 |
-| 스레드 톡 | 스레드 톡 | Issue comments (제목 `스레드 톡` 또는 `#1`), Reactions | 앱이 Issue를 확보한 뒤 댓글을 말풍선으로 표시 |
-| 음성 / 잡담 | 바로 대화 | 없음 | Discord 딥링크 |
+| 소통 | 소통 / 바로 대화 | 없음(Discord) | 탭 선택 시 Discord 딥링크(미연동이면 OAuth). Issue 댓글 UI 아님 |
 | 알림 | 알림 | Webhook | Phase 3. Webhook → Cloudflare Worker → FCM |
 
-할 일 화면은 칸반과 마감일 리스트를 같은 Project 데이터로 전환한다. 홈은 마일스톤, 오늘 할 일, 고정 공지, 최근 활동의 조합이며 별도 저장소가 아니다. 공지·할 일·자료실·스레드 톡의 목록·작성·수정·삭제는 앱 네이티브 UI에서 하며, 원본은 위 GitHub 리소스에만 둔다.
+할 일 화면은 칸반과 마감일 리스트를 같은 Project 데이터로 전환한다. 홈은 마일스톤, 오늘 할 일, 고정 공지, 최근 활동의 조합이며 별도 저장소가 아니다. 공지·할 일·자료실의 목록·작성·수정·삭제는 앱 네이티브 UI에서 하며, 원본은 GitHub에만 둔다. 소통은 Discord다.
+
+### 계정 UX (가입·사용·로그인·로그아웃)
+
+| 단계 | 동작 |
+|------|------|
+| 가입 | GitHub OAuth로 CrewRP 세션 생성 → 크루 시작/초대 수락. Discord는 선택 |
+| 사용 | 공지·할 일·자료실 = GitHub. 소통 = Discord 연동 후 딥링크(미연동이면 연결 유도) |
+| 로그인 | 저장된 GitHub 세션 복귀. Discord는 연동 기록만 보고, Discord 앱 로그인 상태는 OS/Discord가 관리 |
+| 로그아웃 | GitHub 토큰·크루 세션·Discord 연동 기록을 지움. Discord 앱 로그아웃과 동기화하지 않음 |
+| Discord만 해제 | 연동 기록만 삭제. GitHub·크루는 유지 |
 
 ## 4. 인증과 권한
 
-1. 앱이 `code_verifier`를 만들고 `code_challenge`(S256)를 붙인 authorize URL을 시스템 브라우저로 연다. 요청 scope는 `read:org repo project`(Org·저장소·Projects v2 쓰기).
-2. 리다이렉트 URI로 돌아온 `code`와 `code_verifier`를 `auth-bridge`에 넘긴다. Worker가 `client_secret`으로 GitHub와 교환하고, 토큰은 응답으로 기기에만 전달한다.
+1. 앱이 `code_verifier`를 만들고 `code_challenge`(S256)를 붙인 authorize URL을 시스템 브라우저로 연다. GitHub scope는 `read:org repo project`(Org·저장소·Projects v2 쓰기).
+2. 리다이렉트 URI로 돌아온 `code`와 `code_verifier`를 `auth-bridge` `POST /oauth/token`에 넘긴다. Worker가 GitHub `client_secret`으로 교환하고, 토큰은 응답으로 기기에만 전달한다.
 3. 토큰으로 **가입된** 크루(Org `members`/`admins` Team 또는 초대 수락 저장소)와, 아직 owner가 없을 때만 **등록 후보**(admin private repo)를 보여 준다.
 4. 사용자가 크루를 고르면 그 `owner/repo`를 **활성 세션**으로 둔다. owner 등록은 계정당 1회(기존 owner가 없을 때)만 허용한다.
 5. 활성 크루 Organization에서 `admins`(또는 등록 owner)면 편집·삭제·초대, `members`면 읽기와 본인 작성. Org Team이 없고 저장소 admin이면 운영진으로 본다.
+6. Discord 연동: 별도 PKCE authorize(`scope=identify`, redirect `discord-{clientId}:/authorize/callback`). `auth-bridge` `POST /oauth/discord/token`이 코드를 교환한 뒤 Discord `@me`를 조회해 `id`·표시 이름만 앱에 돌려준다. 앱은 `account_link`에 저장하고 Discord 액세스 토큰은 보관하지 않는다.
 
-초대는 관리자가 이메일을 입력하면 Organization invitation API로 메일을 보낸다. 초대 수락자는 가입 목록에만 추가되며(소유 슬롯을 쓰지 않는다).
+초대는 관리자가 이메일을 입력하면 Organization invitation API로 메일을 보낸다. 초대 수락자는 가입 목록에만 추가된다(소유 슬롯을 쓰지 않는다).
 
 ## 5. 캐시, 한도, 푸시
 
@@ -71,6 +82,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | `graphql_cursor` | `query_name` | GraphQL `cursor`, `updated_at` |
 | `crew_membership` | `repo` (`owner/name`) | 내가 소유·가입한 크루. `relation` = `owner` \| `member`, `team_role`. owner 행은 기기당 최대 1개 |
 | `session` | 기기당 1행 | 활성 크루: org, repo(`owner/name`), team role. 토큰은 이 테이블에 넣지 않는다 |
+| `account_link` | `provider` (`discord`) | Discord 연동: `user_id`, `username`, `linked_at`. 액세스 토큰 없음 |
 
 - REST GET은 저장된 `etag`를 `If-None-Match`로 보낸다. `304`는 일차 한도를 소모하지 않으므로 캐시를 유지한다.
 - GraphQL(Discussions, Projects v2)은 ETag가 없다. `graphql_cursor.updated_at`이 신선하면 네트워크를 치지 않는다.
@@ -87,7 +99,7 @@ Worker가 구독하는 Webhook과 앱에 보이는 알림 이름:
 | GitHub event | 알림 |
 |--------------|------|
 | `discussion` created | 새 공지 |
-| `issue_comment` / `discussion_comment` created | 스레드 톡 |
+| `discussion_comment` created | 공지 댓글 |
 | `issues` assigned | 할 일 배정 |
 
 이 외 이벤트는 푸시하지 않는다.
