@@ -182,6 +182,34 @@ class AuthBridgeClientTest {
     }
 }
 
+class CrewSettingsClientTest {
+    @Test
+    fun loadsDiscordSettingsFromRepoFile() {
+        val json = """{"discord":{"serverId":"1","channelId":"2"}}"""
+        val encoded = java.util.Base64.getEncoder().encodeToString(json.toByteArray())
+        JdbcCacheStore(":memory:").use { cache ->
+            val transport = HttpTransport { _, url, _, _ ->
+                assertTrue(url.contains("/contents/.crewrp/settings.json"))
+                HttpResult(200, """{"content":"$encoded","encoding":"base64","sha":"abc"}""")
+            }
+            val file = CrewSettingsClient(transport, cache).load("crew", "box", "t")
+            assertEquals("1", file?.settings?.discord?.serverId)
+            assertEquals("2", file?.settings?.discord?.channelId)
+            assertEquals("abc", file?.sha)
+            assertEquals(true, file?.settings?.discord?.isConfigured)
+        }
+    }
+
+    @Test
+    fun returnsNullWhenSettingsMissing() {
+        JdbcCacheStore(":memory:").use { cache ->
+            val transport = HttpTransport { _, _, _, _ -> HttpResult(404, """{"message":"Not Found"}""") }
+            val file = CrewSettingsClient(transport, cache).load("crew", "box", "t")
+            assertEquals(null, file)
+        }
+    }
+}
+
 class DiscordLinkFlowTest {
     @Test
     fun linkAndUnlink() {

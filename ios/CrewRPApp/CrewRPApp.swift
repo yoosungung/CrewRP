@@ -35,6 +35,9 @@ final class AppModel: ObservableObject {
     @Published var projectMeta: ProjectFieldMeta?
     @Published var discussionSetup: DiscussionSetup?
     @Published var discordLink: AccountLink?
+    @Published var crewSettings: CrewSettingsFile?
+    @Published var discordServerDraft = ""
+    @Published var discordChannelDraft = ""
     private var didRegisterPush = false
 
     private let flow: AuthFlow
@@ -164,6 +167,9 @@ final class AppModel: ObservableObject {
         docsTree = []
         docsDirPath = "docs"
         discordLink = nil
+        crewSettings = nil
+        discordServerDraft = ""
+        discordChannelDraft = ""
         currentLogin = nil
         projectMeta = nil
         discussionSetup = nil
@@ -463,20 +469,55 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func openDiscord() {
-        let server = Bundle.main.object(forInfoDictionaryKey: "DiscordServerID") as? String ?? "REPLACE_ME"
-        let channel = Bundle.main.object(forInfoDictionaryKey: "DiscordChannelID") as? String ?? "REPLACE_ME"
-        UIApplication.shared.open(DiscordDeepLink.voiceChannelURL(serverId: server, channelId: channel))
+    var discordReady: Bool {
+        crewSettings?.settings.discord?.isConfigured == true
     }
 
-    /// 소통 탭 진입: 연동·서버 설정이 있으면 Discord를 바로 연다. 미연동이면 OAuth 연결을 시작한다.
+    func loadCrewSettings() async {
+        guard let token = try? tokens.loadAccessToken(), let parts = repoParts else { return }
+        do {
+            let file = try await CrewSettingsClient(transport: transport, cache: cache)
+                .load(owner: parts.owner, repo: parts.repo, token: token)
+            crewSettings = file
+            if let discord = file?.settings.discord {
+                discordServerDraft = discord.serverId
+                discordChannelDraft = discord.channelId
+            }
+        } catch {
+            log.error("crew settings load failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    func openDiscord() {
+        guard let discord = crewSettings?.settings.discord, discord.isConfigured else { return }
+        UIApplication.shared.open(
+            DiscordDeepLink.voiceChannelURL(serverId: discord.serverId, channelId: discord.channelId)
+        )
+    }
+
+    /// 소통 탭 진입: 연동·크루 서버 설정이 있으면 Discord를 바로 연다. 미연동이면 OAuth 연결을 시작한다.
     func enterTalk() {
-        let server = Bundle.main.object(forInfoDictionaryKey: "DiscordServerID") as? String ?? ""
-        let channel = Bundle.main.object(forInfoDictionaryKey: "DiscordChannelID") as? String ?? ""
-        if discordLink != nil, discordConfigured(serverId: server, channelId: channel) {
-            openDiscord()
-        } else if discordLink == nil {
-            linkDiscord()
+        Task {
+            await loadCrewSettings()
+            if discordLink != nil, discordReady {
+                openDiscord()
+            } else if discordLink == nil {
+                linkDiscord()
+            }
+        }
+    }
+
+    func saveDiscordSettings() async {
+        let server = discordServerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let channel = discordChannelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard discordConfigured(serverId: server, channelId: channel) else {
+            writeError = "서버 ID와 채널 ID를 모두 입력해 주세요."
+            return
+        }
+        await withToken { token, owner, repo in
+            let settings = CrewSettings(discord: CrewDiscordSettings(serverId: server, channelId: channel))
+            crewSettings = try await CrewSettingsClient(transport: transport, cache: cache)
+                .save(owner: owner, repo: repo, token: token, settings: settings, sha: crewSettings?.sha)
         }
     }
 
@@ -1065,10 +1106,8 @@ private struct DocDetailSheet: View {
 private struct TalkTab: View {
     @ObservedObject var model: AppModel
 
-    private var discordReady: Bool {
-        let server = Bundle.main.object(forInfoDictionaryKey: "DiscordServerID") as? String ?? ""
-        let channel = Bundle.main.object(forInfoDictionaryKey: "DiscordChannelID") as? String ?? ""
-        return discordConfigured(serverId: server, channelId: channel)
+    private var isAdmin: Bool {
+        model.session?.teamRole == .admin
     }
 
     var body: some View {
@@ -1081,13 +1120,28 @@ private struct TalkTab: View {
                     Text("연결됨: @\(link.username)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    if discordReady {
+                    if model.discordReady {
                         Button("바로 대화") { model.openDiscord() }
                             .buttonStyle(.borderedProminent)
                             .tint(.crewInk)
                             .controlSize(.large)
+                    } else if isAdmin {
+                        Text("이 크루 Discord 서버·채널을 repo에 등록합니다.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        TextField("서버 ID", text: $model.discordServerDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.numberPad)
+                        TextField("채널 ID", text: $model.discordChannelDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.numberPad)
+                        Button("서버·채널 저장") {
+                            Task { await model.saveDiscordSettings() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.crewInk)
                     } else {
-                        Text("서버·채널 ID를 설정하면 바로 대화를 열 수 있습니다.")
+                        Text("운영진이 Discord 서버·채널을 등록하면 바로 대화를 열 수 있습니다.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -1105,6 +1159,7 @@ private struct TalkTab: View {
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .navigationTitle("소통")
+            .task { await model.loadCrewSettings() }
         }
     }
 }

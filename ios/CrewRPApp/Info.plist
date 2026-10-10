@@ -46,10 +46,6 @@
 	<string>https://crewrp-push-bridge.candydate.workers.dev</string>
 	<key>DiscordClientID</key>
 	<string>1558390079926308924</string>
-	<key>DiscordServerID</key>
-	<string>1382521889267908628</string>
-	<key>DiscordChannelID</key>
-	<string>1382521889267908632</string>
 	<key>ProjectNumber</key>
 	<string>1</string>
 </dict>

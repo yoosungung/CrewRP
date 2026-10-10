@@ -19,8 +19,6 @@ android {
         buildConfigField("String", "AUTH_BRIDGE_URL", "\"https://crewrp-auth-bridge.candydate.workers.dev\"")
         buildConfigField("String", "PUSH_BRIDGE_URL", "\"https://crewrp-push-bridge.candydate.workers.dev\"")
         buildConfigField("String", "DISCORD_CLIENT_ID", "\"1558390079926308924\"")
-        buildConfigField("String", "DISCORD_SERVER_ID", "\"1382521889267908628\"")
-        buildConfigField("String", "DISCORD_CHANNEL_ID", "\"1382521889267908632\"")
         buildConfigField("String", "PROJECT_NUMBER", "\"1\"")
     }
 

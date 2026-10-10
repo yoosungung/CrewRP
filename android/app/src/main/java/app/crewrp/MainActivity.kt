@@ -21,13 +21,18 @@ import app.crewrp.core.AuthBridgeClient
 import app.crewrp.core.AuthConfig
 import app.crewrp.core.AuthFlow
 import app.crewrp.core.CacheStore
+import app.crewrp.core.CrewDiscordSettings
 import app.crewrp.core.CrewRepo
+import app.crewrp.core.CrewSettings
+import app.crewrp.core.CrewSettingsClient
+import app.crewrp.core.CrewSettingsFile
 import app.crewrp.core.DiscordAuthConfig
 import app.crewrp.core.DiscordDeepLink
 import app.crewrp.core.DiscordLinkFlow
 import app.crewrp.core.PendingLogin
 import app.crewrp.core.PendingLoginStore
 import app.crewrp.core.Session
+import app.crewrp.core.TeamRole
 import app.crewrp.core.TokenStore
 import app.crewrp.core.UrlHttpTransport
 import app.crewrp.core.discordConfigured
@@ -143,9 +148,31 @@ class MainActivity : ComponentActivity() {
             var error by remember { mutableStateOf<String?>(null) }
             var content by remember { mutableStateOf(CrewContent(loading = session != null)) }
             var discordLink by remember { mutableStateOf(discordFlow.linkedDiscord()) }
+            var crewSettings by remember { mutableStateOf<CrewSettingsFile?>(null) }
+            var serverDraft by remember { mutableStateOf("") }
+            var channelDraft by remember { mutableStateOf("") }
             var refreshTick by remember { mutableIntStateOf(0) }
             var loadId by remember { mutableIntStateOf(0) }
             var deviceRegistered by remember { mutableStateOf(false) }
+
+            fun loadCrewSettings(activeSession: Session) {
+                val token = tokens.loadAccessToken() ?: return
+                val parts = activeSession.repo.split("/")
+                if (parts.size != 2) return
+                thread {
+                    runCatching {
+                        CrewSettingsClient(transport, cache).load(parts[0], parts[1], token)
+                    }.onSuccess { file ->
+                        runOnUiThread {
+                            crewSettings = file
+                            file?.settings?.discord?.let {
+                                serverDraft = it.serverId
+                                channelDraft = it.channelId
+                            }
+                        }
+                    }.onFailure { Log.e("CrewRP", "crew settings load failed", it) }
+                }
+            }
             onRepos = {
                 repos = it
                 error = if (it.isEmpty()) "운영 권한이 있는 보관소가 없습니다." else null
@@ -235,10 +262,12 @@ class MainActivity : ComponentActivity() {
                             session = active,
                             content = content,
                             discordLink = discordLink,
-                            discordEnabled = discordConfigured(
-                                BuildConfig.DISCORD_SERVER_ID,
-                                BuildConfig.DISCORD_CHANNEL_ID,
-                            ),
+                            discordEnabled = crewSettings?.settings?.discord?.isConfigured == true,
+                            isAdmin = active.teamRole == TeamRole.ADMIN,
+                            serverDraft = serverDraft,
+                            channelDraft = channelDraft,
+                            onServerDraft = { serverDraft = it },
+                            onChannelDraft = { channelDraft = it },
                             actions = CrewActions(
                                 onCreateNotice = { title, body ->
                                     val setup = content.discussionSetup ?: return@CrewActions
@@ -311,18 +340,56 @@ class MainActivity : ComponentActivity() {
                                 discordLink = null
                             },
                             onDiscord = {
-                                val url = DiscordDeepLink.voiceChannelUrl(
-                                    BuildConfig.DISCORD_SERVER_ID,
-                                    BuildConfig.DISCORD_CHANNEL_ID,
-                                )
-                                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                val discord = crewSettings?.settings?.discord
+                                if (discord != null && discord.isConfigured) {
+                                    val url = DiscordDeepLink.voiceChannelUrl(discord.serverId, discord.channelId)
+                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                }
                             },
+                            onSaveDiscordSettings = {
+                                val server = serverDraft.trim()
+                                val channel = channelDraft.trim()
+                                if (!discordConfigured(server, channel)) {
+                                    content = content.copy(writeError = "서버 ID와 채널 ID를 모두 입력해 주세요.")
+                                    return@CrewShell
+                                }
+                                val token = tokens.loadAccessToken() ?: return@CrewShell
+                                val parts = active.repo.split("/")
+                                if (parts.size != 2) return@CrewShell
+                                thread {
+                                    runCatching {
+                                        CrewSettingsClient(transport, cache).save(
+                                            parts[0],
+                                            parts[1],
+                                            token,
+                                            CrewSettings(CrewDiscordSettings(server, channel)),
+                                            crewSettings?.sha,
+                                        )
+                                    }.onSuccess { file ->
+                                        runOnUiThread {
+                                            crewSettings = file
+                                            content = content.copy(writeError = null)
+                                        }
+                                    }.onFailure { err ->
+                                        Log.e("CrewRP", "crew settings save failed", err)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                writeError = writeFailureMessage(err.message ?: err.toString()),
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            onLoadCrewSettings = { loadCrewSettings(active) },
                             onLogout = {
                                 flow.logout()
                                 session = null
                                 repos = emptyList()
                                 content = CrewContent()
                                 discordLink = null
+                                crewSettings = null
+                                serverDraft = ""
+                                channelDraft = ""
                                 error = null
                                 deviceRegistered = false
                             },

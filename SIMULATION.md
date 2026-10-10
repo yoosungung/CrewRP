@@ -5,6 +5,12 @@
 로컬·수동 검증용으로 쓸 수 있는 샘플 저장소: https://github.com/yoosungung/ai-edu  
 (`docs/`, Issue Forms, Discussions, Issue `#1` 등이 미리 잡혀 있음.) 앱에서 이 저장소를 admin으로 보면 등록 목록에 나타나고, 골라 등록하면 된다.
 
+Discord 서버·채널은 크루 repo의 `.crewrp/settings.json`에 둔다(운영진이 앱 소통 탭에서 저장 가능).
+
+```json
+{ "discord": { "serverId": "…", "channelId": "…" } }
+```
+
 ## 검증
 
 ```bash

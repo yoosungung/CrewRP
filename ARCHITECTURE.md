@@ -46,17 +46,24 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` | 폴더 목록·본문은 REST Contents. 검색 인덱스는 Git Trees `recursive=1`(경로 `docs/` 필터). 마크다운은 앱이 렌더 |
 | 첨부 파일 | 첨부 | Releases Assets | REST. 파일당 100MB 이상 2GB 이하. 본문에는 asset URL만 삽입 |
 | 정기 과업 | 자동 업무 | Actions | `workflow_dispatch` 또는 cron. private repository 포함 분(分) 안에서만 |
-| 소통 | 소통 / 바로 대화 | 없음(Discord) | 탭 선택 시 Discord 딥링크(미연동이면 OAuth). Issue 댓글 UI 아님 |
+| 소통 | 소통 / 바로 대화 | `.crewrp/settings.json` + Discord | 탭 선택 시 크루 설정의 서버·채널로 딥링크(미연동이면 OAuth). Issue 댓글 UI 아님 |
 | 알림 | 알림 | Webhook | Phase 3. Webhook → Cloudflare Worker → FCM |
 
-할 일 화면은 칸반과 마감일 리스트를 같은 Project 데이터로 전환한다. 홈은 마일스톤, 오늘 할 일, 고정 공지, 최근 활동의 조합이며 별도 저장소가 아니다. 공지·할 일·자료실의 목록·작성·수정·삭제는 앱 네이티브 UI에서 하며, 원본은 GitHub에만 둔다. 소통은 Discord다.
+할 일 화면은 칸반과 마감일 리스트를 같은 Project 데이터로 전환한다. 홈은 마일스톤, 오늘 할 일, 고정 공지, 최근 활동의 조합이며 별도 저장소가 아니다. 공지·할 일·자료실의 목록·작성·수정·삭제는 앱 네이티브 UI에서 하며, 원본은 GitHub에만 둔다. 소통은 Discord다. Discord **OAuth 앱**은 CrewRP 공용이고, **서버·채널 ID는 크루 repo**의 `.crewrp/settings.json`에 둔다(앱 바이너리에 하드코딩하지 않음).
+
+```json
+{ "discord": { "serverId": "…", "channelId": "…" } }
+```
+
+운영진이 앱에서 등록하거나 파일을 직접 커밋한다.
+
 
 ### 계정 UX (가입·사용·로그인·로그아웃)
 
 | 단계 | 동작 |
 |------|------|
 | 가입 | GitHub OAuth로 CrewRP 세션 생성 → 크루 시작/초대 수락. Discord는 선택 |
-| 사용 | 공지·할 일·자료실 = GitHub. 소통 = Discord 연동 후 딥링크(미연동이면 연결 유도) |
+| 사용 | 공지·할 일·자료실 = GitHub. 소통 = Discord 연동 후 **활성 크루** `.crewrp/settings.json`의 서버·채널 딥링크 |
 | 로그인 | 저장된 GitHub 세션 복귀. Discord는 연동 기록만 보고, Discord 앱 로그인 상태는 OS/Discord가 관리 |
 | 로그아웃 | GitHub 토큰·크루 세션·Discord 연동 기록을 지움. Discord 앱 로그아웃과 동기화하지 않음 |
 | Discord만 해제 | 연동 기록만 삭제. GitHub·크루는 유지 |

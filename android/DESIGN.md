@@ -48,9 +48,9 @@ adb -d shell am start -n app.crewrp/.MainActivity
 - 공지·할 일·자료실·소통은 앱에서 CRUD한다. 탭의 `+`로 작성, 항목 탭으로 상세·수정·삭제. 운영진은 전 항목, 멤버는 본인 작성분만 수정·삭제.
 - 자료실은 목록(파일·폴더) → 다이얼로그 상세(렌더·편집·삭제). `listDocs(path)`로 폴더 드릴다운·상위 복귀. 검색어가 있으면 `listDocsTree` 재귀 인덱스에서 이름·경로 필터(폴더 안 파일 포함). 검색 중 목록(바깥)을 누르면 포커스·키보드를 닫는다. compact에서 목록+본문 split을 쓰지 않는다.
 - OAuth scope는 `read:org repo project`(authorize URL에 포함). Projects v2 쓰기는 `project`가 필요하므로 스코프 변경 후에는 재로그인한다.
-- 소통 탭은 Discord다. 탭 선택 시 연동·서버 설정이 있으면 딥링크를 바로 열고, 미연동이면 OAuth 연결을 시작한다. Issue 말풍선은 소통 본체가 아니다. `fetchCrewContent`에서 Issue 톡 API를 호출하지 않는다.
+- 소통 탭은 Discord다. 탭 선택 시 연동·**활성 크루** `.crewrp/settings.json`의 서버·채널이 있으면 딥링크를 바로 열고, 미연동이면 OAuth 연결을 시작한다. Issue 말풍선은 소통 본체가 아니다. `fetchCrewContent`에서 Issue 톡 API를 호출하지 않는다.
 - Discord 연동은 `account_link`에 user id·표시 이름만 두고, Discord 액세스 토큰은 보관하지 않는다. 앱 로그아웃 시 연동도 지운다.
-- `BuildConfig`: `DISCORD_CLIENT_ID`(OAuth), `DISCORD_SERVER_ID` / `DISCORD_CHANNEL_ID`(딥링크).
+- `BuildConfig`: `DISCORD_CLIENT_ID`(OAuth 공용). 서버·채널 ID는 repo `.crewrp/settings.json`(운영진이 앱에서 등록 가능).
 - JVM `HttpURLConnection`은 PATCH를 거부하므로 `UrlHttpTransport`는 POST + `X-HTTP-Method-Override: PATCH`로 보낸다(댓글·이슈 상태·자료 갱신).
 - 홈(TopAppBar)·크루 시작 화면에 **로그아웃**이 있다. 토큰·대기 OAuth·세션을 지우고 로그인 화면으로 돌아간다.
 - 모든 쓰기(등록·저장·삭제·댓글)는 백그라운드 스레드에서 하고, 실패 시 원인 원문 대신 “저장하지 못했습니다”류(스코프 부족이면 재로그인 안내)만 보여 준다.

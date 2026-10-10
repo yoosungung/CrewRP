@@ -220,11 +220,18 @@ fun CrewShell(
     content: CrewContent,
     discordLink: AccountLink?,
     discordEnabled: Boolean,
+    isAdmin: Boolean,
+    serverDraft: String,
+    channelDraft: String,
+    onServerDraft: (String) -> Unit,
+    onChannelDraft: (String) -> Unit,
     actions: CrewActions,
     onRefresh: () -> Unit,
     onLinkDiscord: () -> Unit,
     onUnlinkDiscord: () -> Unit,
     onDiscord: () -> Unit,
+    onSaveDiscordSettings: () -> Unit,
+    onLoadCrewSettings: () -> Unit,
     onLogout: () -> Unit,
 ) {
     var tab by remember { mutableIntStateOf(0) }
@@ -236,6 +243,7 @@ fun CrewShell(
 
     LaunchedEffect(tab) {
         if (tab != 3) return@LaunchedEffect
+        onLoadCrewSettings()
         when {
             discordLink != null && discordEnabled -> onDiscord()
             discordLink == null -> onLinkDiscord()
@@ -306,10 +314,16 @@ fun CrewShell(
                 else -> TalkTab(
                     discordLink = discordLink,
                     discordEnabled = discordEnabled,
+                    isAdmin = isAdmin,
+                    serverDraft = serverDraft,
+                    channelDraft = channelDraft,
+                    onServerDraft = onServerDraft,
+                    onChannelDraft = onChannelDraft,
                     modifier = Modifier.weight(1f),
                     onLink = onLinkDiscord,
                     onUnlink = onUnlinkDiscord,
                     onDiscord = onDiscord,
+                    onSaveDiscordSettings = onSaveDiscordSettings,
                 )
             }
         }
@@ -856,10 +870,16 @@ private fun DocDetailDialog(
 private fun TalkTab(
     discordLink: AccountLink?,
     discordEnabled: Boolean,
+    isAdmin: Boolean,
+    serverDraft: String,
+    channelDraft: String,
+    onServerDraft: (String) -> Unit,
+    onChannelDraft: (String) -> Unit,
     modifier: Modifier,
     onLink: () -> Unit,
     onUnlink: () -> Unit,
     onDiscord: () -> Unit,
+    onSaveDiscordSettings: () -> Unit,
 ) {
     Column(
         modifier
@@ -875,9 +895,18 @@ private fun TalkTab(
             )
             if (discordEnabled) {
                 Button(onClick = onDiscord, Modifier.fillMaxWidth()) { Text("바로 대화") }
+            } else if (isAdmin) {
+                Text(
+                    "이 크루 Discord 서버·채널을 repo에 등록합니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(serverDraft, onServerDraft, Modifier.fillMaxWidth(), label = { Text("서버 ID") })
+                OutlinedTextField(channelDraft, onChannelDraft, Modifier.fillMaxWidth(), label = { Text("채널 ID") })
+                Button(onClick = onSaveDiscordSettings, Modifier.fillMaxWidth()) { Text("서버·채널 저장") }
             } else {
                 Text(
-                    "서버·채널 ID를 설정하면 바로 대화를 열 수 있습니다.",
+                    "운영진이 Discord 서버·채널을 등록하면 바로 대화를 열 수 있습니다.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

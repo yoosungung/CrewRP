@@ -322,6 +322,40 @@ struct AuthFlowTests {
     }
 }
 
+@Suite("CrewSettingsClient")
+struct CrewSettingsClientTests {
+    @Test("loads discord settings from repo file")
+    func loadSettings() async throws {
+        let json = #"{"discord":{"serverId":"1","channelId":"2"}}"#
+        let encoded = Data(json.utf8).base64EncodedString()
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            #expect(request.url!.path.contains("/contents/.crewrp/settings.json"))
+            let body = Data(#"{"content":"\#(encoded)","encoding":"base64","sha":"abc"}"#.utf8)
+            return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let cache = try CacheStore(path: ":memory:")
+        let file = try await CrewSettingsClient(transport: transport, cache: cache)
+            .load(owner: "crew", repo: "box", token: "t")
+        #expect(file?.settings.discord?.serverId == "1")
+        #expect(file?.settings.discord?.channelId == "2")
+        #expect(file?.sha == "abc")
+        #expect(file?.settings.discord?.isConfigured == true)
+    }
+
+    @Test("returns nil when settings missing")
+    func missingSettings() async throws {
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            (Data(), HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!)
+        }
+        let cache = try CacheStore(path: ":memory:")
+        let file = try await CrewSettingsClient(transport: transport, cache: cache)
+            .load(owner: "crew", repo: "box", token: "t")
+        #expect(file == nil)
+    }
+}
+
 @Suite("DiscordLinkFlow")
 struct DiscordLinkFlowTests {
     @Test("links discord identity via bridge")

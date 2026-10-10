@@ -16,7 +16,7 @@
 1. OAuth2 → Redirects에 **정확히** `discord-1558390079926308924:/authorize/callback` 추가.
 2. OAuth2 → Client Secret → Worker `DISCORD_CLIENT_SECRET`(퍼블릭 키와 다름).
 3. 앱 Client ID·URL scheme `discord-1558390079926308924` 반영됨.
-4. 딥링크 서버·채널: `1382521889267908628` / `1382521889267908632`.
+4. 딥링크 서버·채널은 크루 repo `.crewrp/settings.json`에 둔다(앱 바이너리 아님).
 
 `DISCORD_CLIENT_SECRET`이 없으면 `POST /oauth/discord/token`은 `503 discord_not_configured`.
 
