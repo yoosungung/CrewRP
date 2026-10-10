@@ -327,7 +327,11 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onClearBoardCategory = {
-                                    content = content.copy(selectedCategory = null, boardPosts = emptyList())
+                                    content = content.copy(
+                                        selectedCategory = null,
+                                        boardPosts = emptyList(),
+                                        boardComments = emptyList(),
+                                    )
                                 },
                                 onCreateTask = { title, body, status, due, assignee ->
                                     runWrite { it.createTask(title, body, status, due, assignee) }
@@ -453,6 +457,49 @@ class MainActivity : ComponentActivity() {
                                         runOnUiThread {
                                             content = content.copy(
                                                 taskComments = content.taskComments.filter { it.id != commentId },
+                                                writeError = null,
+                                            )
+                                        }
+                                    }
+                                },
+                                onLoadBoardComments = { discussionId ->
+                                    runWrite(refresh = false) { writer ->
+                                        val comments = writer.listBoardComments(discussionId)
+                                        runOnUiThread {
+                                            content = content.copy(boardComments = comments, writeError = null)
+                                        }
+                                    }
+                                },
+                                onPostBoardComment = { discussionId, body ->
+                                    runWrite(refresh = false) { writer ->
+                                        val msg = writer.postBoardComment(discussionId, body)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                boardComments = content.boardComments + msg,
+                                                writeError = null,
+                                            )
+                                        }
+                                    }
+                                },
+                                onUpdateBoardComment = { commentId, body ->
+                                    runWrite(refresh = false) { writer ->
+                                        val msg = writer.updateBoardComment(commentId, body)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                boardComments = content.boardComments.map {
+                                                    if (it.id == commentId) msg else it
+                                                },
+                                                writeError = null,
+                                            )
+                                        }
+                                    }
+                                },
+                                onDeleteBoardComment = { commentId ->
+                                    runWrite(refresh = false) { writer ->
+                                        writer.deleteBoardComment(commentId)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                boardComments = content.boardComments.filter { it.id != commentId },
                                                 writeError = null,
                                             )
                                         }

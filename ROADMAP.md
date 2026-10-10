@@ -49,11 +49,13 @@
 - [ ] 홈 README·소통 카테고리 글 수동 E2E
 - 완료 기준: 홈에서 README, 소통에서 바로 대화·카테고리 글 작성·열람 수동 확인
 
-## Phase 6 — 할 일 댓글
+## Phase 6 — 할 일·게시판 댓글
 
 - [x] 할 일 상세에서 Issue comments 목록·작성·수정·삭제 (`ThreadTalkClient`)
-- [ ] 수동 E2E: 할 일 열고 댓글 1회 작성·수정·삭제
-- 완료 기준: issueNumber 있는 할 일에서 댓글 CRUD 확인
+- [x] 게시판 글 상세에서 Discussion comments 목록·작성·수정·삭제 (`DiscussionsClient`)
+- [x] 작성·수정 팝업 제목을 할 일·글·문서 제목(경로 basename)으로 표시
+- [ ] 수동 E2E: 할 일·게시판 글에서 댓글 1회 작성·수정·삭제
+- 완료 기준: issueNumber 있는 할 일·Discussion 글에서 댓글 CRUD 확인
 
 ## 미결정
 

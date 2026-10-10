@@ -118,13 +118,13 @@ import app.crewrp.core.formatDue
 import app.crewrp.core.formatDueOnDate
 import app.crewrp.core.SHELL_TASKS_TAB_INDEX
 import app.crewrp.core.homeSections
-import app.crewrp.core.normalizeAssigneeLogin
-import app.crewrp.core.taskAssigneeLabel
 import app.crewrp.core.kanbanUsesStackedLanes
 import app.crewrp.core.listedLibrary
+import app.crewrp.core.normalizeAssigneeLogin
 import app.crewrp.core.parentDocsPath
 import app.crewrp.core.parseDueOnDate
 import app.crewrp.core.roleLabel
+import app.crewrp.core.taskAssigneeLabel
 import app.crewrp.core.taskLane
 import app.crewrp.core.taskMatching
 import app.crewrp.core.taskStatusChoice
@@ -177,6 +177,10 @@ data class CrewActions(
     val onPostTaskComment: (issueNumber: Int, body: String) -> Unit,
     val onUpdateTaskComment: (commentId: String, body: String) -> Unit,
     val onDeleteTaskComment: (commentId: String) -> Unit,
+    val onLoadBoardComments: (discussionId: String) -> Unit,
+    val onPostBoardComment: (discussionId: String, body: String) -> Unit,
+    val onUpdateBoardComment: (commentId: String, body: String) -> Unit,
+    val onDeleteBoardComment: (commentId: String) -> Unit,
 )
 
 private data class Destination(val label: String, val selectedIcon: ImageVector, val icon: ImageVector)
@@ -430,7 +434,7 @@ fun CrewShell(
 
     when (val kind = compose) {
         ComposeKind.BoardPost -> FormDialog(
-            title = "글 작성",
+            emptyTitle = "새 글",
             onDismiss = { compose = null },
             onSubmit = { t, b ->
                 val cat = content.selectedCategory ?: return@FormDialog
@@ -449,7 +453,8 @@ fun CrewShell(
             },
         )
         ComposeKind.Doc -> FormDialog(
-            title = "자료 저장",
+            emptyTitle = "새 문서",
+            titleFromPath = true,
             titleLabel = "경로 (docs/…)",
             initialTitle = if (content.docsDirPath == "docs") "docs/notes.md" else "${content.docsDirPath}/notes.md",
             bodyLabel = "내용",
@@ -480,10 +485,11 @@ fun CrewShell(
     }
 
     editingNotice?.let { notice ->
-        FormDialog(
-            title = "글 수정",
-            initialTitle = notice.title,
-            initialBody = notice.body,
+        BoardPostFormDialog(
+            content = content,
+            actions = actions,
+            role = session.teamRole,
+            notice = notice,
             showDelete = canMutate(session.teamRole, notice.authorLogin, content.currentLogin),
             onDismiss = { editingNotice = null },
             onSubmit = { t, b -> actions.onUpdateBoardPost(notice, t, b); editingNotice = null },
@@ -740,10 +746,127 @@ private fun DueOnField(
 }
 
 @Composable
-private fun FormDialog(
-    title: String,
+private fun BoardPostFormDialog(
+    content: CrewContent,
+    actions: CrewActions,
+    role: TeamRole,
+    notice: Notice,
     onDismiss: () -> Unit,
     onSubmit: (String, String) -> Unit,
+    showDelete: Boolean = false,
+    onDelete: (() -> Unit)? = null,
+) {
+    var fieldTitle by remember { mutableStateOf(notice.title) }
+    var fieldBody by remember { mutableStateOf(notice.body) }
+    var draftComment by remember { mutableStateOf("") }
+    var editingComment by remember { mutableStateOf<ThreadMessage?>(null) }
+    var editDraft by remember { mutableStateOf("") }
+    val dialogTitle = fieldTitle.trim().ifEmpty { "새 글" }
+    LaunchedEffect(notice.id) {
+        actions.onLoadBoardComments(notice.id)
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(dialogTitle, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column(
+                Modifier.heightIn(max = 480.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    fieldTitle,
+                    { fieldTitle = it },
+                    label = { Text("제목") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    fieldBody,
+                    { fieldBody = it },
+                    label = { Text("본문") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                )
+                Text("댓글", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                if (content.boardComments.isEmpty()) {
+                    Text("아직 댓글이 없습니다.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    LazyColumn(Modifier.heightIn(max = 160.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(content.boardComments, key = { it.id }) { comment ->
+                            Column {
+                                Text("@${comment.author}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(comment.body, style = MaterialTheme.typography.bodyMedium)
+                                if (canMutate(role, comment.author, content.currentLogin)) {
+                                    Row {
+                                        TextButton(onClick = {
+                                            editingComment = comment
+                                            editDraft = comment.body
+                                        }) { Text("수정") }
+                                        TextButton(onClick = { actions.onDeleteBoardComment(comment.id) }) { Text("삭제") }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    draftComment,
+                    { draftComment = it },
+                    label = { Text("댓글 작성") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                )
+                TextButton(
+                    onClick = {
+                        val text = draftComment.trim()
+                        if (text.isNotEmpty()) {
+                            actions.onPostBoardComment(notice.id, text)
+                            draftComment = ""
+                        }
+                    },
+                    enabled = draftComment.isNotBlank(),
+                ) { Text("댓글 등록") }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSubmit(fieldTitle, fieldBody) },
+                enabled = fieldTitle.isNotBlank(),
+            ) { Text("저장") }
+        },
+        dismissButton = {
+            Row {
+                if (showDelete && onDelete != null) {
+                    TextButton(onClick = onDelete) { Text("삭제") }
+                }
+                TextButton(onClick = onDismiss) { Text("닫기") }
+            }
+        },
+    )
+    editingComment?.let { comment ->
+        AlertDialog(
+            onDismissRequest = { editingComment = null },
+            title = { Text("댓글 수정") },
+            text = {
+                OutlinedTextField(editDraft, { editDraft = it }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    actions.onUpdateBoardComment(comment.id, editDraft)
+                    editingComment = null
+                }) { Text("저장") }
+            },
+            dismissButton = { TextButton(onClick = { editingComment = null }) { Text("취소") } },
+        )
+    }
+}
+
+@Composable
+private fun FormDialog(
+    onDismiss: () -> Unit,
+    onSubmit: (String, String) -> Unit,
+    emptyTitle: String = "새 글",
+    titleFromPath: Boolean = false,
     titleLabel: String = "제목",
     bodyLabel: String = "본문",
     initialTitle: String = "",
@@ -754,9 +877,17 @@ private fun FormDialog(
 ) {
     var t by remember { mutableStateOf(initialTitle) }
     var b by remember { mutableStateOf(initialBody) }
+    val dialogTitle = run {
+        val raw = t.trim()
+        when {
+            raw.isEmpty() -> emptyTitle
+            titleFromPath -> raw.substringAfterLast('/').ifEmpty { emptyTitle }
+            else -> raw
+        }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
+        title = { Text(dialogTitle, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(t, { t = it }, label = { Text(titleLabel) }, enabled = titleEnabled, modifier = Modifier.fillMaxWidth())

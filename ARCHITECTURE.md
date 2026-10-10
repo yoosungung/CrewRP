@@ -16,7 +16,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 - **계정:** CrewRP 신원은 GitHub 로그인으로 만든다. Discord는 **선택 연동**(identify). GitHub 토큰으로 Discord API에 로그인하지 않는다. 연동 결과는 기기에 `discord_user_id`·표시 이름만 둔다(Discord 액세스 토큰은 연동 직후 폐기).
 - GitHub, Cloudflare, Firebase의 결제 한도는 $0이며, 포함 한도를 넘기면 사용을 멈춘다. 포함 한도는 §5와 같다.
 - 의결, 회계, 문서의 감사 추적은 GitHub에 남긴다. 로컬 SQLite는 캐시이며 원본이 아니다.
-- 실시간 채팅 엔진을 두지 않는다. **소통**은 (1) Discord 바로 대화(잡담·음성 딥링크) + (2) Discussions 카테고리별 게시판이다. **할 일별 댓글**은 해당 Issue comments이며 소통 탭에 두지 않는다.
+- 실시간 채팅 엔진을 두지 않는다. **소통**은 (1) Discord 바로 대화(잡담·음성 딥링크) + (2) Discussions 카테고리별 게시판이다. **게시판 글 댓글**은 해당 Discussion comments다. **할 일별 댓글**은 해당 Issue comments이며 소통 탭에 두지 않는다.
 - 본문에 넣는 파일은 Releases Assets로만 업로드한다. 비공식 업로드 엔드포인트는 계약이 아니다.
 
 ## 2. 크루 리소스
@@ -45,7 +45,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | 행정 서식 | 서식 | Issue Forms YAML, Issues | 앱이 `.github/ISSUE_TEMPLATE` YAML을 읽어 네이티브 폼을 그린 뒤 Issue를 생성 |
 | 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` + Releases Assets | **문서**는 `docs/**/*.md`(필요 시 `.txt`) — Contents 목록·본문, Trees 검색, 인앱 마크다운 렌더/편집. **첨부**(이미지·PDF·기타)는 `crewrp-attachments` Release Assets — 업로드·목록·다운로드. 탭 시 미리보기 가능하면 View(QuickLook/Intent), 아니면 Share/Download. 본문에 넣을 때도 asset URL만. 범용 바이너리를 Contents에 올리지 않는다 |
 | 정기 과업 | 자동 업무 | Actions | `workflow_dispatch` 또는 cron. private repository 포함 분(分) 안에서만 |
-| 소통 | 소통 / 바로 대화 / 게시판 | Discord + Discussions | **상단** 바로 대화: `.crewrp/settings.json` 서버·채널 딥링크(미연동이면 OAuth). **하단** 게시판: Discussions 카테고리 → 글 목록·본문·작성. 탭 진입 시 Discord를 자동으로 열지 않는다. Issue 댓글 UI 아님 |
+| 소통 | 소통 / 바로 대화 / 게시판 | Discord + Discussions | **상단** 바로 대화: `.crewrp/settings.json` 서버·채널 딥링크(미연동이면 OAuth). **하단** 게시판: Discussions 카테고리 → 글 목록·본문·작성·**글 댓글**(Discussion comments 목록·작성·수정·삭제). 탭 진입 시 Discord를 자동으로 열지 않는다. Issue 댓글 UI 아님 |
 | 알림 | 알림 | Webhook | Phase 3. Webhook → Cloudflare Worker → FCM |
 
 할 일 화면은 칸반과 마감일 리스트를 같은 Project 데이터로 전환한다. 홈은 README·내 담당·오늘·다가오는 할 일이며 별도 저장소가 아니다. 담당자는 GitHub Issue assignees이며 Projects 커스텀 필드가 아니다. 할 일·자료실·소통(게시판)의 목록·작성·수정·삭제는 앱 네이티브 UI에서 하며, 원본은 GitHub에만 둔다. Discord **OAuth 앱**은 CrewRP 공용이고, **서버·채널 ID는 크루 repo**의 `.crewrp/settings.json`에 둔다(앱 바이너리에 하드코딩하지 않음).

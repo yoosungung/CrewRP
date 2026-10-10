@@ -42,13 +42,14 @@ adb -d shell am start -n app.crewrp/.MainActivity
 - 테마는 `ui/Theme.kt`. 밝은 화면은 종이색 배경과 틸 포인트, 어두운 화면은 같은 색의 어두운 쌍. 런처 아이콘은 iOS와 같은 **원작** flat 마크(`mipmap/ic_launcher`, adaptive)다.
 - 화면은 `ui/Shell.kt`. 로그인, 크루 시작, 하단 4탭.
 - 할 일은 칸반(접수·진행 중·완료)과 마감일 목록을 전환한다. compact(폰, 너비 < 600dp) 칸반은 레인별 세로 섹션(전체 너비)이고, 와이드는 다열·상단 정렬(마감일 목록과 같음)이다. 홈은 repo `README.md` 렌더, **내 담당**(로그인 사용자 Issue assignee·미완료), 오늘·다가오는 할 일이다(고정 공지·홈 FAB 공지 작성 없음). 홈의 담당·오늘·다가오는 할 일을 누르면 할 일 탭으로 전환하고 해당 할 일 수정 다이얼로그를 연다.
+- 할 일·게시판 글·문서 작성·수정 다이얼로그 **제목**은 입력 중인 제목(문서는 경로 basename)이다. 비어 있으면 `새 할 일` / `새 글` / `새 문서`.
 - 할 일 작성·수정은 제목·내용·상태(드롭다운)·담당자(계정 아이디, 「나에게」)·납기(캘린더만) 순이다. 화면 문구에 GitHub를 쓰지 않는다. 내용은 Issue body, 상태는 Projects Status, 담당자는 Issue assignees, 납기는 DATE 필드에 저장한다. 보드에 날짜 필드가 없으면 `Due date`를 만든다. **수정 다이얼로그**에서 `issueNumber`가 있으면 댓글(Issue comments) 목록·작성·본인/운영진 수정·삭제를 보여 준다.
 - 불러오기 실패는 원인 원문 대신 다시 시도를 보여 준다. Discord 식별자가 비어 있으면 바로 대화 버튼을 숨긴다.
 - OAuth PKCE `state`/`code_verifier`는 EncryptedSharedPreferences에 둔다. 브라우저에서 돌아올 때 Activity가 다시 만들어져도 교환이 된다. 토큰 교환은 백그라운드 스레드에서 한다.
 - 할 일·자료실·소통(게시판 글)은 앱에서 CRUD한다. 탭의 `+`로 작성(소통은 카테고리 안에서), 항목 탭으로 상세·수정·삭제. 운영진은 전 항목, 멤버는 본인 작성분만 수정·삭제.
 - 자료실은 **문서(md)** + **첨부(Release Assets)** . 문서: 목록 → 다이얼로그 상세(렌더·편집·삭제). `listDocs(path)` 드릴다운·상위 복귀. 검색 시 `listDocsTree` + 첨부 이름 필터. `+`는 「문서 작성」|「파일 첨부」. 첨부는 `ReleaseAssetClient`로 `crewrp-attachments`에 업로드·목록. 탭 시 이미지/PDF는 `ACTION_VIEW`, 그 외 Share/Download. 검색 중 목록(바깥) 탭으로 포커스·키보드를 닫는다. compact에서 목록+본문 split을 쓰지 않는다.
 - OAuth scope는 `read:org repo project`(authorize URL에 포함). Projects v2 쓰기는 `project`가 필요하므로 스코프 변경 후에는 재로그인한다.
-- 소통 탭은 **허브**다. 상단 바로 대화(Discord 연동·딥링크·운영진 서버·채널 등록), 하단 Discussions 카테고리 → 글 목록·상세·작성. 탭 진입 시 Discord를 자동으로 열지 않는다. Issue 말풍선은 소통 본체가 아니다.
+- 소통 탭은 **허브**다. 상단 바로 대화(Discord 연동·딥링크·운영진 서버·채널 등록), 하단 Discussions 카테고리 → 글 목록·상세·작성. **글 수정 다이얼로그**에서 Discussion comments 목록·작성·본인/운영진 수정·삭제를 보여 준다. 탭 진입 시 Discord를 자동으로 열지 않는다. Issue 말풍선은 소통 본체가 아니다.
 - Discord 연동은 `account_link`에 user id·표시 이름만 두고, Discord 액세스 토큰은 보관하지 않는다. 앱 로그아웃 시 연동도 지운다.
 - `BuildConfig`: `DISCORD_CLIENT_ID`(OAuth 공용). 서버·채널 ID는 repo `.crewrp/settings.json`(운영진이 앱에서 등록 가능).
 - JVM `HttpURLConnection`은 PATCH를 거부하므로 `UrlHttpTransport`는 POST + `X-HTTP-Method-Override: PATCH`로 보낸다(댓글·이슈 상태·자료 갱신).

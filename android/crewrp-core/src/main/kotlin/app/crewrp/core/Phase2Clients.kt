@@ -991,6 +991,102 @@ class DiscussionsClient(
             },
         )
     }
+
+    fun listDiscussionComments(discussionId: String, token: String): List<ThreadMessage> {
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            query(${'$'}id:ID!){
+              node(id:${'$'}id){
+                ... on Discussion {
+                  comments(first:50){ nodes { id body author { login } } }
+                }
+              }
+            }
+            """.trimIndent(),
+            buildJsonObject { put("id", discussionId) },
+        )
+        val nodes = root["data"]?.jsonObject?.get("node")?.jsonObject
+            ?.get("comments")?.jsonObject?.get("nodes")?.jsonArray
+            ?: return emptyList()
+        return nodes.mapNotNull { element ->
+            val o = element as? JsonObject ?: return@mapNotNull null
+            val id = o["id"].textOrNull() ?: return@mapNotNull null
+            ThreadMessage(
+                id,
+                o["body"].textOrNull().orEmpty(),
+                o["author"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull().orEmpty(),
+            )
+        }
+    }
+
+    fun addDiscussionComment(discussionId: String, body: String, token: String): ThreadMessage {
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            mutation(${'$'}input:AddDiscussionCommentInput!){
+              addDiscussionComment(input:${'$'}input){ comment { id body author { login } } }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                putJsonObject("input") {
+                    put("discussionId", discussionId)
+                    put("body", body)
+                }
+            },
+        )
+        return decodeDiscussionComment(root, "addDiscussionComment")
+    }
+
+    fun updateDiscussionComment(commentId: String, body: String, token: String): ThreadMessage {
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            mutation(${'$'}input:UpdateDiscussionCommentInput!){
+              updateDiscussionComment(input:${'$'}input){ comment { id body author { login } } }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                putJsonObject("input") {
+                    put("commentId", commentId)
+                    put("body", body)
+                }
+            },
+        )
+        return decodeDiscussionComment(root, "updateDiscussionComment")
+    }
+
+    fun deleteDiscussionComment(commentId: String, token: String) {
+        Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            mutation(${'$'}input:DeleteDiscussionCommentInput!){
+              deleteDiscussionComment(input:${'$'}input){ comment { id } }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                putJsonObject("input") { put("id", commentId) }
+            },
+        )
+    }
+
+    private fun decodeDiscussionComment(root: JsonObject, key: String): ThreadMessage {
+        val c = root["data"]?.jsonObject?.get(key)?.jsonObject?.get("comment")?.jsonObject
+            ?: error("comment mutation failed")
+        return ThreadMessage(
+            c["id"].textOrNull().orEmpty(),
+            c["body"].textOrNull().orEmpty(),
+            c["author"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull().orEmpty(),
+        )
+    }
 }
 
 data class FormField(val id: String, val label: String, val required: Boolean, val type: String)

@@ -36,6 +36,7 @@ data class CrewContent(
     val selectedCategory: DiscussionCategory? = null,
     val boardPosts: List<Notice> = emptyList(),
     val taskComments: List<ThreadMessage> = emptyList(),
+    val boardComments: List<ThreadMessage> = emptyList(),
     val docs: List<DocEntry> = emptyList(),
     val docsTree: List<DocEntry> = emptyList(),
     val docsDirPath: String = "docs",
@@ -279,4 +280,16 @@ class CrewWriter(
 
     fun deleteTaskComment(commentId: String) =
         ThreadTalkClient(transport).deleteComment(owner, repo, commentId, token)
+
+    fun listBoardComments(discussionId: String): List<ThreadMessage> =
+        DiscussionsClient(transport).listDiscussionComments(discussionId, token)
+
+    fun postBoardComment(discussionId: String, body: String): ThreadMessage =
+        DiscussionsClient(transport).addDiscussionComment(discussionId, body, token)
+
+    fun updateBoardComment(commentId: String, body: String): ThreadMessage =
+        DiscussionsClient(transport).updateDiscussionComment(commentId, body, token)
+
+    fun deleteBoardComment(commentId: String) =
+        DiscussionsClient(transport).deleteDiscussionComment(commentId, token)
 }

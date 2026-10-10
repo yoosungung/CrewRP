@@ -1,0 +1,23 @@
+# Gradle / Kotlin
+.gradle/
+.kotlin/
+build/
+
+# Local SDK path
+local.properties
+
+# Android Studio / NDK
+captures/
+.externalNativeBuild/
+.cxx/
+*.iml
+*.apk
+*.aab
+output-metadata.json
+*.hprof
+*.log
+
+# Secrets / signing (never commit)
+google-services.json
+*.jks
+*.keystore

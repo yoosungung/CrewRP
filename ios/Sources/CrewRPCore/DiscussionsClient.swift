@@ -299,6 +299,89 @@ public struct DiscussionsClient: Sendable {
         )
     }
 
+    public func listDiscussionComments(discussionId: String, token: String) async throws -> [ThreadMessage] {
+        let query = """
+        query($id:ID!){
+          node(id:$id){
+            ... on Discussion {
+              comments(first:50){ nodes { id body author { login } } }
+            }
+          }
+        }
+        """
+        let data = try await graphql(token: token, query: query, variables: ["id": discussionId])
+        struct Envelope: Decodable {
+            struct DataObj: Decodable {
+                struct Node: Decodable {
+                    struct Comments: Decodable {
+                        struct Comment: Decodable {
+                            let id: String
+                            let body: String
+                            let author: Author?
+                            struct Author: Decodable { let login: String }
+                        }
+                        let nodes: [Comment]
+                    }
+                    let comments: Comments?
+                }
+                let node: Node?
+            }
+            let data: DataObj
+        }
+        let nodes = try JSONDecoder().decode(Envelope.self, from: data).data.node?.comments?.nodes ?? []
+        return nodes.map { ThreadMessage(id: $0.id, body: $0.body, author: $0.author?.login ?? "") }
+    }
+
+    public func addDiscussionComment(discussionId: String, body: String, token: String) async throws -> ThreadMessage {
+        let query = """
+        mutation($input:AddDiscussionCommentInput!){
+          addDiscussionComment(input:$input){ comment { id body author { login } } }
+        }
+        """
+        let data = try await graphql(
+            token: token,
+            query: query,
+            variables: ["input": ["discussionId": discussionId, "body": body]]
+        )
+        return try decodeDiscussionCommentMutation(data, key: "addDiscussionComment")
+    }
+
+    public func updateDiscussionComment(commentId: String, body: String, token: String) async throws -> ThreadMessage {
+        let query = """
+        mutation($input:UpdateDiscussionCommentInput!){
+          updateDiscussionComment(input:$input){ comment { id body author { login } } }
+        }
+        """
+        let data = try await graphql(
+            token: token,
+            query: query,
+            variables: ["input": ["commentId": commentId, "body": body]]
+        )
+        return try decodeDiscussionCommentMutation(data, key: "updateDiscussionComment")
+    }
+
+    public func deleteDiscussionComment(commentId: String, token: String) async throws {
+        let query = """
+        mutation($input:DeleteDiscussionCommentInput!){
+          deleteDiscussionComment(input:$input){ comment { id } }
+        }
+        """
+        _ = try await graphql(token: token, query: query, variables: ["input": ["id": commentId]])
+    }
+
+    private func decodeDiscussionCommentMutation(_ data: Data, key: String) throws -> ThreadMessage {
+        guard
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let dataObj = root["data"] as? [String: Any],
+            let payload = dataObj[key] as? [String: Any],
+            let c = payload["comment"] as? [String: Any],
+            let id = c["id"] as? String,
+            let body = c["body"] as? String
+        else { throw GitHubAPIError.invalidResponse }
+        let author = (c["author"] as? [String: Any])?["login"] as? String ?? ""
+        return ThreadMessage(id: id, body: body, author: author)
+    }
+
     private func decodeDiscussionMutation(_ data: Data, key: String) throws -> Notice {
         guard
             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],

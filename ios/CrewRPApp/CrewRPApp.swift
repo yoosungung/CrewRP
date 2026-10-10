@@ -36,6 +36,7 @@ final class AppModel: ObservableObject {
     @Published var selectedCategory: DiscussionCategory?
     @Published var boardPosts: [Notice] = []
     @Published var taskComments: [ThreadMessage] = []
+    @Published var boardComments: [ThreadMessage] = []
     @Published var isLoading = false
     @Published var tasksFailed = false
     @Published var readmeFailed = false
@@ -182,6 +183,7 @@ final class AppModel: ObservableObject {
         selectedCategory = nil
         boardPosts = []
         taskComments = []
+        boardComments = []
         discordLink = nil
         crewSettings = nil
         discordServerDraft = ""
@@ -431,6 +433,58 @@ final class AppModel: ObservableObject {
     func clearBoardCategory() {
         selectedCategory = nil
         boardPosts = []
+        boardComments = []
+    }
+
+    func loadBoardComments(discussionId: String) async {
+        guard let token = try? tokens.loadAccessToken() else { return }
+        do {
+            boardComments = try await DiscussionsClient(transport: transport)
+                .listDiscussionComments(discussionId: discussionId, token: token)
+            writeError = nil
+        } catch {
+            writeError = writeFailureMessage(String(describing: error))
+        }
+    }
+
+    func postBoardComment(discussionId: String, body: String) async {
+        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let token = try? tokens.loadAccessToken() else { return }
+        do {
+            let msg = try await DiscussionsClient(transport: transport)
+                .addDiscussionComment(discussionId: discussionId, body: text, token: token)
+            boardComments.append(msg)
+            writeError = nil
+        } catch {
+            writeError = writeFailureMessage(String(describing: error))
+        }
+    }
+
+    func updateBoardComment(commentId: String, body: String) async {
+        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let token = try? tokens.loadAccessToken() else { return }
+        do {
+            let msg = try await DiscussionsClient(transport: transport)
+                .updateDiscussionComment(commentId: commentId, body: text, token: token)
+            if let idx = boardComments.firstIndex(where: { $0.id == commentId }) {
+                boardComments[idx] = msg
+            }
+            writeError = nil
+        } catch {
+            writeError = writeFailureMessage(String(describing: error))
+        }
+    }
+
+    func deleteBoardComment(commentId: String) async {
+        guard let token = try? tokens.loadAccessToken() else { return }
+        do {
+            try await DiscussionsClient(transport: transport)
+                .deleteDiscussionComment(commentId: commentId, token: token)
+            boardComments.removeAll { $0.id == commentId }
+            writeError = nil
+        } catch {
+            writeError = writeFailureMessage(String(describing: error))
+        }
     }
 
     func loadTaskComments(issueNumber: Int) async {
@@ -1362,7 +1416,8 @@ private struct DocsTab: View {
             .refreshable { await model.refreshHomeData(forceNetwork: true) }
             .sheet(isPresented: $composing) {
                 ComposeSheet(
-                    title: "자료 저장",
+                    emptyTitle: "새 문서",
+                    titleFromPath: true,
                     titleLabel: "경로 (docs/…)",
                     bodyLabel: "내용",
                     initialTitle: model.docsDirPath == "docs" ? "docs/notes.md" : "\(model.docsDirPath)/notes.md"
@@ -1570,18 +1625,15 @@ private struct TalkTab: View {
             .refreshable { await model.refreshHomeData(forceNetwork: true) }
             .task { await model.loadCrewSettings() }
             .sheet(isPresented: $composing) {
-                ComposeSheet(title: "글 작성", titleLabel: "제목", bodyLabel: "본문") { t, b in
+                ComposeSheet(emptyTitle: "새 글", titleLabel: "제목", bodyLabel: "본문") { t, b in
                     guard let cat = model.selectedCategory else { return }
                     Task { await model.createBoardPost(categoryId: cat.id, title: t, body: b) }
                 }
             }
             .sheet(item: $editing) { post in
-                ComposeSheet(
-                    title: "글 수정",
-                    titleLabel: "제목",
-                    bodyLabel: "본문",
-                    initialTitle: post.title,
-                    initialBody: post.body,
+                BoardPostSheet(
+                    post: post,
+                    model: model,
                     showDelete: canMutate(
                         role: model.session?.teamRole ?? .none,
                         authorLogin: post.authorLogin,
@@ -1617,9 +1669,133 @@ private struct DueOnField: View {
     }
 }
 
+private struct BoardPostSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let post: Notice
+    var model: AppModel?
+    var showDelete = false
+    var onSave: (String, String) -> Void
+    var onDelete: (() -> Void)?
+
+    @State private var fieldTitle: String
+    @State private var fieldBody: String
+    @State private var draftComment = ""
+    @State private var editingComment: ThreadMessage?
+    @State private var editDraft = ""
+
+    private var sheetTitle: String {
+        let t = fieldTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? "새 글" : t
+    }
+
+    init(
+        post: Notice,
+        model: AppModel? = nil,
+        showDelete: Bool = false,
+        onSave: @escaping (String, String) -> Void,
+        onDelete: (() -> Void)? = nil
+    ) {
+        self.post = post
+        self.model = model
+        self.showDelete = showDelete
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _fieldTitle = State(initialValue: post.title)
+        _fieldBody = State(initialValue: post.body)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("제목", text: $fieldTitle)
+                TextField("본문", text: $fieldBody, axis: .vertical).lineLimit(4...12)
+                if let model {
+                    Section("댓글") {
+                        if model.boardComments.isEmpty {
+                            Text("아직 댓글이 없습니다.").foregroundStyle(.secondary)
+                        } else {
+                            ForEach(model.boardComments) { comment in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("@\(comment.author)").font(.caption).foregroundStyle(.secondary)
+                                    Text(comment.body)
+                                    if canMutate(
+                                        role: model.session?.teamRole ?? .none,
+                                        authorLogin: comment.author,
+                                        currentLogin: model.currentLogin
+                                    ) {
+                                        HStack {
+                                            Button("수정") {
+                                                editingComment = comment
+                                                editDraft = comment.body
+                                            }
+                                            .font(.caption)
+                                            Button("삭제", role: .destructive) {
+                                                Task { await model.deleteBoardComment(commentId: comment.id) }
+                                            }
+                                            .font(.caption)
+                                        }
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                        TextField("댓글 작성", text: $draftComment, axis: .vertical)
+                            .lineLimit(2...5)
+                        Button("댓글 등록") {
+                            let text = draftComment
+                            draftComment = ""
+                            Task { await model.postBoardComment(discussionId: post.id, body: text) }
+                        }
+                        .disabled(draftComment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+            .navigationTitle(sheetTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("닫기") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("저장") {
+                        onSave(fieldTitle, fieldBody)
+                        dismiss()
+                    }
+                    .disabled(fieldTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if showDelete, let onDelete {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("삭제", role: .destructive) {
+                            onDelete()
+                            dismiss()
+                        }
+                    }
+                }
+            }
+            .task(id: post.id) {
+                await model?.loadBoardComments(discussionId: post.id)
+            }
+            .alert("댓글 수정", isPresented: Binding(
+                get: { editingComment != nil },
+                set: { if !$0 { editingComment = nil } }
+            )) {
+                TextField("내용", text: $editDraft)
+                Button("저장") {
+                    guard let comment = editingComment, let model else { return }
+                    let text = editDraft
+                    editingComment = nil
+                    Task { await model.updateBoardComment(commentId: comment.id, body: text) }
+                }
+                Button("취소", role: .cancel) { editingComment = nil }
+            } message: {
+                Text("댓글 내용을 수정합니다.")
+            }
+        }
+    }
+}
+
 private struct ComposeSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let title: String
+    var emptyTitle = "새 글"
+    var titleFromPath = false
     var titleLabel = "제목"
     var bodyLabel = "본문"
     var initialTitle = ""
@@ -1632,8 +1808,19 @@ private struct ComposeSheet: View {
     @State private var fieldTitle = ""
     @State private var fieldBody = ""
 
+    private var sheetTitle: String {
+        let raw = fieldTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.isEmpty { return emptyTitle }
+        if titleFromPath {
+            let base = raw.split(separator: "/").last.map(String.init) ?? raw
+            return base.isEmpty ? emptyTitle : base
+        }
+        return raw
+    }
+
     init(
-        title: String,
+        emptyTitle: String = "새 글",
+        titleFromPath: Bool = false,
         titleLabel: String = "제목",
         bodyLabel: String = "본문",
         initialTitle: String = "",
@@ -1643,7 +1830,8 @@ private struct ComposeSheet: View {
         onSave: @escaping (String, String) -> Void,
         onDelete: (() -> Void)? = nil
     ) {
-        self.title = title
+        self.emptyTitle = emptyTitle
+        self.titleFromPath = titleFromPath
         self.titleLabel = titleLabel
         self.bodyLabel = bodyLabel
         self.initialTitle = initialTitle
@@ -1662,7 +1850,8 @@ private struct ComposeSheet: View {
                 TextField(titleLabel, text: $fieldTitle).disabled(!titleEnabled)
                 TextField(bodyLabel, text: $fieldBody, axis: .vertical).lineLimit(4...12)
             }
-            .navigationTitle(title)
+            .navigationTitle(sheetTitle)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("닫기") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

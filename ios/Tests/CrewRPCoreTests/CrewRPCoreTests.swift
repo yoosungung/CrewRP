@@ -858,6 +858,74 @@ struct DiscussionsCategoriesTests {
         #expect(items[0].title == "hello")
     }
 
+    @Test("listDiscussionComments parses top-level comments")
+    func listDiscussionComments() async throws {
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            let raw = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
+            #expect(raw.contains("comments"))
+            #expect(raw.contains("D1"))
+            let body = Data(#"""
+            {"data":{"node":{"comments":{"nodes":[
+              {"id":"DC1","body":"좋아요","author":{"login":"ada"}}
+            ]}}}}
+            """#.utf8)
+            return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let items = try await DiscussionsClient(transport: transport)
+            .listDiscussionComments(discussionId: "D1", token: "t")
+        #expect(items == [ThreadMessage(id: "DC1", body: "좋아요", author: "ada")])
+    }
+
+    @Test("discussionCommentCrud mutations")
+    func discussionCommentCrud() async throws {
+        final class Step: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func next() -> Int {
+                lock.lock()
+                defer { lock.unlock() }
+                let current = value
+                value += 1
+                return current
+            }
+        }
+        let step = Step()
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            let raw = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
+            switch step.next() {
+            case 0:
+                #expect(raw.contains("addDiscussionComment"))
+                #expect(raw.contains("D1"))
+                let body = Data(#"""
+                {"data":{"addDiscussionComment":{"comment":{"id":"DC1","body":"hi","author":{"login":"ada"}}}}}
+                """#.utf8)
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            case 1:
+                #expect(raw.contains("updateDiscussionComment"))
+                #expect(raw.contains("DC1"))
+                let body = Data(#"""
+                {"data":{"updateDiscussionComment":{"comment":{"id":"DC1","body":"edit","author":{"login":"ada"}}}}}
+                """#.utf8)
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            default:
+                #expect(raw.contains("deleteDiscussionComment"))
+                #expect(raw.contains("DC1"))
+                let body = Data(#"""
+                {"data":{"deleteDiscussionComment":{"comment":{"id":"DC1"}}}}
+                """#.utf8)
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+        }
+        let client = DiscussionsClient(transport: transport)
+        let created = try await client.addDiscussionComment(discussionId: "D1", body: "hi", token: "t")
+        #expect(created.body == "hi")
+        let updated = try await client.updateDiscussionComment(commentId: "DC1", body: "edit", token: "t")
+        #expect(updated.body == "edit")
+        try await client.deleteDiscussionComment(commentId: "DC1", token: "t")
+    }
+
     @Test("fetchReadme returns nil on 404")
     func readmeMissing() async throws {
         let cache = try CacheStore(path: ":memory:")

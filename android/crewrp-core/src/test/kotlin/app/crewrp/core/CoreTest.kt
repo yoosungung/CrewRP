@@ -922,6 +922,45 @@ class ShellPresentationTest {
     }
 
     @Test
+    fun discussionCommentCrud() {
+        var step = 0
+        val client = DiscussionsClient(HttpTransport { _, _, _, body ->
+            when (step++) {
+                0 -> {
+                    assertTrue(body!!.contains("comments"))
+                    assertTrue(body.contains("D1"))
+                    HttpResult(
+                        200,
+                        """{"data":{"node":{"comments":{"nodes":[{"id":"DC1","body":"좋아요","author":{"login":"ada"}}]}}}}""",
+                    )
+                }
+                1 -> {
+                    assertTrue(body!!.contains("addDiscussionComment"))
+                    HttpResult(
+                        200,
+                        """{"data":{"addDiscussionComment":{"comment":{"id":"DC2","body":"hi","author":{"login":"ada"}}}}}""",
+                    )
+                }
+                2 -> {
+                    assertTrue(body!!.contains("updateDiscussionComment"))
+                    HttpResult(
+                        200,
+                        """{"data":{"updateDiscussionComment":{"comment":{"id":"DC2","body":"edit","author":{"login":"ada"}}}}}""",
+                    )
+                }
+                else -> {
+                    assertTrue(body!!.contains("deleteDiscussionComment"))
+                    HttpResult(200, """{"data":{"deleteDiscussionComment":{"comment":{"id":"DC2"}}}}""")
+                }
+            }
+        })
+        assertEquals(listOf(ThreadMessage("DC1", "좋아요", "ada")), client.listDiscussionComments("D1", "t"))
+        assertEquals("hi", client.addDiscussionComment("D1", "hi", "t").body)
+        assertEquals("edit", client.updateDiscussionComment("DC2", "edit", "t").body)
+        client.deleteDiscussionComment("DC2", "t")
+    }
+
+    @Test
     fun createUpdateDeleteNotice() {
         var step = 0
         val client = DiscussionsClient(HttpTransport { _, _, _, body ->
