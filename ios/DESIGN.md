@@ -33,7 +33,7 @@ CREWRP_E2E_TOKEN=… CREWRP_E2E_REPO=owner/repo ../scripts/e2e-crud.sh
 
 화면 계산은 `CrewRPCore`의 `ShellPresentation`이다. SwiftUI 셸은 `CrewRPApp.swift`.
 
-- 포인트 색은 틸이고, 배경은 시스템 grouped 색을 따른다. 앱 아이콘은 `CrewRPApp/Assets.xcassets`의 틸 배경·세 명 실루엣이다.
+- 포인트 색은 틸이고, 배경은 시스템 grouped 색을 따른다. 앱 아이콘은 `CrewRPApp/Assets.xcassets/AppIcon.appiconset`의 **원작** flat 마크(틸 배경·원형 링·세 명 실루엣·2×2 계획 그리드, 1024×1024 RGB)다. 타사 로고를 쓰지 않는다.
 - 소통·자료실 검색에서 입력 중 칸 밖(목록)을 누르면 포커스를 해제하고 키보드를 닫아 탭이 다시 보인다.
 - 할 일은 칸반(접수·진행 중·완료)과 마감일 목록을 전환한다. compact(폰) 칸반은 레인별 세로 섹션(전체 너비)이고, 와이드는 다열·상단 정렬(마감일 목록과 같음)이다. 홈은 repo `README.md` 렌더, 오늘 할 일, 다가오는 할 일이다(고정 공지·홈 `+` 없음).
 - 할 일 작성·수정은 제목·내용·상태(메뉴)·납기(캘린더만) 순이다. 내용은 Issue body, 상태는 Projects Status, 납기는 DATE 필드에 저장한다. 보드에 날짜 필드가 없으면 `Due date`를 만든다. **수정 시트**에서 `issueNumber`가 있으면 댓글(Issue comments) 목록·작성·본인/운영진 수정·삭제를 보여 준다.

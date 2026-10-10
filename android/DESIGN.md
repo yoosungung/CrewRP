@@ -39,7 +39,7 @@ adb -d shell am start -n app.crewrp/.MainActivity
 
 화면 계산(역할 문구, 칸반 분류·compact 레이아웃, 홈 섹션, 자료 블록, 마감 표기, 상세 상태·납기)은 `crewrp-core`의 `ShellPresentation`이다. 앱 모듈은 그리기만 한다.
 
-- 테마는 `ui/Theme.kt`. 밝은 화면은 종이색 배경과 틸 포인트, 어두운 화면은 같은 색의 어두운 쌍.
+- 테마는 `ui/Theme.kt`. 밝은 화면은 종이색 배경과 틸 포인트, 어두운 화면은 같은 색의 어두운 쌍. 런처 아이콘은 iOS와 같은 **원작** flat 마크(`mipmap/ic_launcher`, adaptive)다.
 - 화면은 `ui/Shell.kt`. 로그인, 크루 시작, 하단 4탭.
 - 할 일은 칸반(접수·진행 중·완료)과 마감일 목록을 전환한다. compact(폰, 너비 < 600dp) 칸반은 레인별 세로 섹션(전체 너비)이고, 와이드는 다열·상단 정렬(마감일 목록과 같음)이다. 홈은 repo `README.md` 렌더, 오늘 할 일, 다가오는 할 일이다(고정 공지·홈 FAB 공지 작성 없음).
 - 할 일 작성·수정은 제목·내용·상태(드롭다운)·납기(캘린더만) 순이다. 내용은 Issue body, 상태는 Projects Status, 납기는 DATE 필드에 저장한다. 보드에 날짜 필드가 없으면 `Due date`를 만든다. **수정 다이얼로그**에서 `issueNumber`가 있으면 댓글(Issue comments) 목록·작성·본인/운영진 수정·삭제를 보여 준다.
