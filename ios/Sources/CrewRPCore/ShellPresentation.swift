@@ -165,6 +165,13 @@ public func homeSections(tasks: [TaskCard], today: String) -> HomeSections {
     return HomeSections(today: todayTasks, upcoming: Array(upcoming))
 }
 
+/// TabView / NavigationBar에서 할 일 탭 인덱스.
+public let shellTasksTabIndex = 1
+
+public func taskMatching(id: String, in tasks: [TaskCard]) -> TaskCard? {
+    tasks.first { $0.id == id }
+}
+
 public enum DocBlock: Equatable, Sendable {
     case heading(String)
     case bullet(String)

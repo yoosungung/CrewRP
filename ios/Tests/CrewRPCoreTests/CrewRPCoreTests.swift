@@ -709,6 +709,9 @@ struct ShellPresentationTests {
         let home = homeSections(tasks: tasks, today: "2026-09-27")
         #expect(home.today.map(\.id) == ["a"])
         #expect(home.upcoming.map(\.id) == ["b"])
+        #expect(shellTasksTabIndex == 1)
+        #expect(taskMatching(id: "b", in: tasks)?.title == "다음")
+        #expect(taskMatching(id: "missing", in: tasks) == nil)
     }
 
     @Test("doc blocks keep headings, bullets, and paragraphs")

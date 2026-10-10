@@ -39,7 +39,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | 내 크루 | 크루 전환 | memberships | 소유 0–1 + 가입 N. 하나를 골라 활성 세션으로 둔다 |
 | 크루 시작 | 크루 등록 | Repositories (admin) | admin private repo 중 하나 등록. 이미 owner면 불가 |
 | 초대 | 초대 | Organization invitation | 이메일만 |
-| 홈 | 홈 | Contents `README.md` + Projects | 크루 소개는 repo 루트 README 렌더. 오늘·다가오는 할 일 요약. 고정 공지 목록은 두지 않는다 |
+| 홈 | 홈 | Contents `README.md` + Projects | 크루 소개는 repo 루트 README 렌더. 오늘·다가오는 할 일 요약(탭하면 할 일 화면에서 해당 항목 열림). 고정 공지 목록은 두지 않는다 |
 | 투표 참여 | 투표 | Discussion poll | 기존 poll 조회와 `addDiscussionPollVote`. 앱에서 poll 생성은 하지 않는다 |
 | 할 일 | 할 일 / 댓글 | Projects (v2), Issues | GraphQL로 칸반·납기. **할 일별 댓글**은 연결된 Issue의 REST comments(목록·작성·수정·삭제). 소통 탭이 아님 |
 | 행정 서식 | 서식 | Issue Forms YAML, Issues | 앱이 `.github/ISSUE_TEMPLATE` YAML을 읽어 네이티브 폼을 그린 뒤 Issue를 생성 |

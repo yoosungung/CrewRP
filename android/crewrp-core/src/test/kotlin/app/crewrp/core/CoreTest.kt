@@ -580,6 +580,9 @@ class ShellPresentationTest {
         val home = homeSections(tasks, "2026-09-27")
         assertEquals(listOf("a"), home.today.map { it.id })
         assertEquals(listOf("b"), home.upcoming.map { it.id })
+        assertEquals(1, SHELL_TASKS_TAB_INDEX)
+        assertEquals("다음", taskMatching("b", tasks)?.title)
+        assertEquals(null, taskMatching("missing", tasks))
     }
 
     @Test

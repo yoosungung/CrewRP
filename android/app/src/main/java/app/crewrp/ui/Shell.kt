@@ -116,6 +116,7 @@ import app.crewrp.core.docBlocks
 import app.crewrp.core.dueOnInput
 import app.crewrp.core.formatDue
 import app.crewrp.core.formatDueOnDate
+import app.crewrp.core.SHELL_TASKS_TAB_INDEX
 import app.crewrp.core.homeSections
 import app.crewrp.core.kanbanUsesStackedLanes
 import app.crewrp.core.listedLibrary
@@ -123,6 +124,7 @@ import app.crewrp.core.parentDocsPath
 import app.crewrp.core.parseDueOnDate
 import app.crewrp.core.roleLabel
 import app.crewrp.core.taskLane
+import app.crewrp.core.taskMatching
 import app.crewrp.core.taskStatusChoice
 import java.time.Instant
 import java.time.LocalDate
@@ -283,6 +285,7 @@ fun CrewShell(
     var compose by remember { mutableStateOf<ComposeKind?>(null) }
     var editingNotice by remember { mutableStateOf<Notice?>(null) }
     var editingTask by remember { mutableStateOf<TaskCard?>(null) }
+    var pendingOpenTaskId by remember { mutableStateOf<String?>(null) }
     var viewingDoc by remember { mutableStateOf(false) }
     var docsAddMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -301,6 +304,13 @@ fun CrewShell(
 
     LaunchedEffect(tab) {
         if (tab == 3) onLoadCrewSettings()
+    }
+    LaunchedEffect(tab, pendingOpenTaskId, content.tasks) {
+        val id = pendingOpenTaskId ?: return@LaunchedEffect
+        if (tab != SHELL_TASKS_TAB_INDEX) return@LaunchedEffect
+        val task = taskMatching(id, content.tasks) ?: return@LaunchedEffect
+        editingTask = task
+        pendingOpenTaskId = null
     }
 
     Scaffold(
@@ -377,7 +387,15 @@ fun CrewShell(
                 )
             }
             when (tab) {
-                0 -> HomeTab(session, content, Modifier.weight(1f))
+                0 -> HomeTab(
+                    session,
+                    content,
+                    Modifier.weight(1f),
+                    onOpenTask = { task ->
+                        pendingOpenTaskId = task.id
+                        tab = SHELL_TASKS_TAB_INDEX
+                    },
+                )
                 1 -> TasksTab(content, Modifier.weight(1f), onRefresh, onOpen = { editingTask = it })
                 2 -> DocsTab(
                     content,
@@ -740,7 +758,12 @@ private fun FormDialog(
 }
 
 @Composable
-private fun HomeTab(session: Session, content: CrewContent, modifier: Modifier) {
+private fun HomeTab(
+    session: Session,
+    content: CrewContent,
+    modifier: Modifier,
+    onOpenTask: (TaskCard) -> Unit,
+) {
     val today = LocalDate.now().toString()
     val sections = homeSections(content.tasks, today)
     val quiet = sections.today.isEmpty() && sections.upcoming.isEmpty() && content.readme.isEmpty()
@@ -773,11 +796,15 @@ private fun HomeTab(session: Session, content: CrewContent, modifier: Modifier) 
             }
             if (sections.today.isNotEmpty()) {
                 item { Text("오늘 할 일", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
-                items(sections.today, key = { it.id }) { TaskRow(it) }
+                items(sections.today, key = { it.id }) { task ->
+                    Box(Modifier.clickable { onOpenTask(task) }) { TaskRow(task) }
+                }
             }
             if (sections.upcoming.isNotEmpty()) {
                 item { Text("다가오는 할 일", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
-                items(sections.upcoming, key = { "up-${it.id}" }) { TaskRow(it) }
+                items(sections.upcoming, key = { "up-${it.id}" }) { task ->
+                    Box(Modifier.clickable { onOpenTask(task) }) { TaskRow(task) }
+                }
             }
         }
     }

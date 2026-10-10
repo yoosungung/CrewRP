@@ -20,6 +20,8 @@ final class AppModel: ObservableObject {
     @Published var session: Session?
     @Published var errorMessage: String?
     @Published var selectedTab = 0
+    /// 홈에서 고른 할 일 — 할 일 탭으로 전환한 뒤 시트로 연다.
+    @Published var pendingOpenTaskId: String?
     @Published var tasks: [TaskCard] = []
     @Published var readme: String = ""
     @Published var docPreview: String = ""
@@ -189,7 +191,13 @@ final class AppModel: ObservableObject {
         docPreview = ""
         docSha = nil
         selectedTab = 0
+        pendingOpenTaskId = nil
         didRegisterPush = false
+    }
+
+    func openTaskFromHome(_ task: TaskCard) {
+        pendingOpenTaskId = task.id
+        selectedTab = shellTasksTabIndex
     }
 
     func refreshHomeData(forceNetwork: Bool = false) async {
@@ -834,10 +842,18 @@ private struct HomeTab: View {
                             }
                         }
                         if !sections.today.isEmpty {
-                            Section("오늘 할 일") { ForEach(sections.today, id: \.id) { TaskRow(task: $0) } }
+                            Section("오늘 할 일") {
+                                ForEach(sections.today, id: \.id) { task in
+                                    Button { model.openTaskFromHome(task) } label: { TaskRow(task: task) }
+                                }
+                            }
                         }
                         if !sections.upcoming.isEmpty {
-                            Section("다가오는 할 일") { ForEach(sections.upcoming, id: \.id) { TaskRow(task: $0) } }
+                            Section("다가오는 할 일") {
+                                ForEach(sections.upcoming, id: \.id) { task in
+                                    Button { model.openTaskFromHome(task) } label: { TaskRow(task: task) }
+                                }
+                            }
                         }
                     }
                 }
@@ -924,7 +940,16 @@ private struct TasksTab: View {
                     onDelete: { Task { await model.deleteTask(task) } }
                 )
             }
+            .onAppear { openPendingTaskIfNeeded() }
+            .onChange(of: model.pendingOpenTaskId) { _, _ in openPendingTaskIfNeeded() }
         }
+    }
+
+    private func openPendingTaskIfNeeded() {
+        guard let id = model.pendingOpenTaskId,
+              let task = taskMatching(id: id, in: model.tasks) else { return }
+        editing = task
+        model.pendingOpenTaskId = nil
     }
 }
 

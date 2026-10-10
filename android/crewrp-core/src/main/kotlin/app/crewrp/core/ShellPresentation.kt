@@ -100,6 +100,12 @@ fun homeSections(tasks: List<TaskCard>, today: String): HomeSections {
     return HomeSections(todayTasks, upcoming)
 }
 
+/** NavigationBar에서 할 일 탭 인덱스. */
+const val SHELL_TASKS_TAB_INDEX = 1
+
+fun taskMatching(id: String, tasks: List<TaskCard>): TaskCard? =
+    tasks.firstOrNull { it.id == id }
+
 sealed interface DocBlock {
     data class Heading(val text: String) : DocBlock
     data class Bullet(val text: String) : DocBlock
