@@ -7,6 +7,7 @@ public struct TaskCard: Sendable, Equatable, Identifiable, Codable {
     public let dueOn: String?
     public let issueNumber: Int?
     public let contentId: String?
+    public let body: String
 
     public init(
         id: String,
@@ -14,7 +15,8 @@ public struct TaskCard: Sendable, Equatable, Identifiable, Codable {
         status: String,
         dueOn: String?,
         issueNumber: Int? = nil,
-        contentId: String? = nil
+        contentId: String? = nil,
+        body: String = ""
     ) {
         self.id = id
         self.title = title
@@ -22,6 +24,7 @@ public struct TaskCard: Sendable, Equatable, Identifiable, Codable {
         self.dueOn = dueOn
         self.issueNumber = issueNumber
         self.contentId = contentId
+        self.body = body
     }
 }
 
@@ -286,8 +289,29 @@ public struct ProjectsClient: Sendable {
             status: statusLabel,
             dueOn: dueOn,
             issueNumber: issue.number,
-            contentId: issue.node_id
+            contentId: issue.node_id,
+            body: body
         )
+    }
+
+    public func updateIssue(
+        owner: String,
+        repo: String,
+        issueNumber: Int,
+        title: String,
+        body: String,
+        token: String
+    ) async throws {
+        var request = URLRequest(url: apiBase.appending(path: "repos/\(owner)/\(repo)/issues/\(issueNumber)"))
+        request.httpMethod = "PATCH"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["title": title, "body": body])
+        let (_, response) = try await transport.data(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            throw GitHubAPIError.httpStatus(response.statusCode)
+        }
     }
 
     public func updateTaskFields(
@@ -375,7 +399,7 @@ public struct ProjectsClient: Sendable {
               items(first:50){
                 nodes{
                   id
-                  content{ ... on Issue { title number id } }
+                  content{ ... on Issue { title body number id } }
                   fieldValues(first:20){
                     nodes{
                       ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
@@ -401,6 +425,7 @@ public struct ProjectsClient: Sendable {
             guard let id = node["id"] as? String else { return nil }
             let content = node["content"] as? [String: Any]
             let title = content?["title"] as? String ?? "(제목 없음)"
+            let body = content?["body"] as? String ?? ""
             let issueNumber = content?["number"] as? Int
             let contentId = content?["id"] as? String
             var status = "접수"
@@ -419,7 +444,8 @@ public struct ProjectsClient: Sendable {
                 status: status,
                 dueOn: due,
                 issueNumber: issueNumber,
-                contentId: contentId
+                contentId: contentId,
+                body: body
             )
         }
     }

@@ -334,26 +334,38 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createTask(title: String, dueOn: String?) async {
+    func createTask(title: String, body: String, status: String, dueOn: String?) async {
         await withToken { token, owner, repo in
             let projects = ProjectsClient(transport: transport)
             let number = try await projects.resolveProjectNumber(
                 owner: session?.org ?? owner, preferred: projectNumber, token: token
             )
             _ = try await projects.createTask(
-                owner: owner, repo: repo, title: title, body: "", projectNumber: number, token: token, dueOn: dueOn
+                owner: owner,
+                repo: repo,
+                title: title,
+                body: body,
+                projectNumber: number,
+                token: token,
+                dueOn: dueOn,
+                statusLabel: status
             )
         }
     }
 
-    func updateTask(_ card: TaskCard, status: String, dueOn: String?) async {
+    func updateTask(_ card: TaskCard, title: String, body: String, status: String, dueOn: String?) async {
         guard let meta = projectMeta else { return }
         let due = dueOn.flatMap { value in
             let trimmed = dueOnInput(value)
             return trimmed.isEmpty ? nil : trimmed
         }
-        await withToken { token, owner, _ in
+        await withToken { token, owner, repo in
             let projects = ProjectsClient(transport: transport)
+            if let issueNumber = card.issueNumber {
+                try await projects.updateIssue(
+                    owner: owner, repo: repo, issueNumber: issueNumber, title: title, body: body, token: token
+                )
+            }
             let number = try await projects.resolveProjectNumber(
                 owner: session?.org ?? owner, preferred: projectNumber, token: token
             )
@@ -723,15 +735,18 @@ private struct TasksTab: View {
             }
             .refreshable { await model.refreshHomeData(forceNetwork: true) }
             .sheet(isPresented: $composing) {
-                ComposeSheet(title: "할 일 추가", titleLabel: "제목", bodyLabel: "마감 (YYYY-MM-DD)", initialBody: "") { t, due in
-                    Task { await model.createTask(title: t, dueOn: due.isEmpty ? nil : due) }
+                TaskFormSheet(title: "할 일 추가") { taskTitle, body, status, due in
+                    Task { await model.createTask(title: taskTitle, body: body, status: status, dueOn: due) }
                 }
             }
             .sheet(item: $editing) { task in
-                TaskEditSheet(
+                TaskFormSheet(
+                    title: "할 일 수정",
                     task: task,
                     showDelete: model.session?.teamRole == .admin,
-                    onSave: { status, due in Task { await model.updateTask(task, status: status, dueOn: due) } },
+                    onSave: { taskTitle, body, status, due in
+                        Task { await model.updateTask(task, title: taskTitle, body: body, status: status, dueOn: due) }
+                    },
                     onDelete: { Task { await model.deleteTask(task) } }
                 )
             }
@@ -757,6 +772,7 @@ private struct KanbanBoard: View {
                 .padding(.bottom, 16)
             }
         } else {
+            // Horizontal ScrollView centers short content vertically; pin to top like 마감일 list.
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(TaskLane.allCases, id: \.self) { lane in
@@ -764,7 +780,9 @@ private struct KanbanBoard: View {
                     }
                 }
                 .padding(.horizontal, 16)
+                .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 }
@@ -794,51 +812,58 @@ private struct KanbanLaneColumn: View {
     }
 }
 
-private struct TaskEditSheet: View {
+private struct TaskFormSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let task: TaskCard
+    let title: String
     var showDelete = false
-    var onSave: (String, String?) -> Void
+    var onSave: (String, String, String, String?) -> Void
     var onDelete: (() -> Void)?
 
+    @State private var fieldTitle: String
+    @State private var fieldBody: String
     @State private var status: String
     @State private var dueOn: String
 
     init(
-        task: TaskCard,
+        title: String,
+        task: TaskCard? = nil,
         showDelete: Bool = false,
-        onSave: @escaping (String, String?) -> Void,
+        onSave: @escaping (String, String, String, String?) -> Void,
         onDelete: (() -> Void)? = nil
     ) {
-        self.task = task
+        self.title = title
         self.showDelete = showDelete
         self.onSave = onSave
         self.onDelete = onDelete
-        _status = State(initialValue: taskStatusChoice(status: task.status))
-        _dueOn = State(initialValue: dueOnInput(task.dueOn))
+        _fieldTitle = State(initialValue: task?.title ?? "")
+        _fieldBody = State(initialValue: task?.body ?? "")
+        _status = State(initialValue: task.map { taskStatusChoice(status: $0.status) } ?? TaskLane.inbox.title)
+        _dueOn = State(initialValue: dueOnInput(task?.dueOn))
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("제목", text: .constant(task.title)).disabled(true)
+                TextField("제목", text: $fieldTitle)
+                TextField("내용", text: $fieldBody, axis: .vertical).lineLimit(3...10)
                 Picker("상태", selection: $status) {
                     ForEach(TaskLane.allCases, id: \.self) { lane in
                         Text(lane.title).tag(lane.title)
                     }
                 }
-                .pickerStyle(.segmented)
-                TextField("납기 (YYYY-MM-DD)", text: $dueOn)
+                .pickerStyle(.menu)
+                DueOnField(dueOn: $dueOn)
             }
-            .navigationTitle("할 일 수정")
+            .navigationTitle(title)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("닫기") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("저장") {
                         let due = dueOnInput(dueOn)
-                        onSave(status, due.isEmpty ? nil : due)
+                        onSave(fieldTitle, fieldBody, status, due.isEmpty ? nil : due)
                         dismiss()
                     }
+                    .disabled(fieldTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 if showDelete, let onDelete {
                     ToolbarItem(placement: .bottomBar) {
@@ -858,11 +883,17 @@ private struct DocsTab: View {
     @State private var composing = false
     @State private var showingDetail = false
     @State private var search = ""
+    @FocusState private var searchFocused: Bool
 
     private var listed: [DocEntry] {
         listedDocs(folderEntries: model.docs, treeEntries: model.docsTree, query: search)
     }
     private var parentPath: String? { parentDocsPath(model.docsDirPath) }
+
+    private func dismissSearch() {
+        searchFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
 
     var body: some View {
         NavigationStack {
@@ -878,30 +909,43 @@ private struct DocsTab: View {
                         }
                         TextField("이름·경로 검색", text: $search)
                             .textFieldStyle(.roundedBorder)
+                            .focused($searchFocused)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                        if listed.isEmpty {
-                            EmptyHint(
-                                title: model.docs.isEmpty ? "자료실이 비어 있습니다" : "검색 결과가 없습니다",
-                                message: model.docs.isEmpty ? "+ 로 자료를 추가하세요." : "다른 검색어를 입력해 보세요."
-                            )
-                        } else {
-                            List(listed, id: \.path) { entry in
-                                Button {
-                                    if entry.isDir {
-                                        Task { await model.listDocs(at: entry.path) }
-                                    } else {
-                                        Task {
-                                            await model.openDoc(path: entry.path)
-                                            showingDetail = true
+                        Group {
+                            if listed.isEmpty {
+                                EmptyHint(
+                                    title: model.docs.isEmpty ? "자료실이 비어 있습니다" : "검색 결과가 없습니다",
+                                    message: model.docs.isEmpty ? "+ 로 자료를 추가하세요." : "다른 검색어를 입력해 보세요."
+                                )
+                            } else {
+                                List(listed, id: \.path) { entry in
+                                    Button {
+                                        dismissSearch()
+                                        if entry.isDir {
+                                            Task { await model.listDocs(at: entry.path) }
+                                        } else {
+                                            Task {
+                                                await model.openDoc(path: entry.path)
+                                                showingDetail = true
+                                            }
                                         }
+                                    } label: {
+                                        Label(entry.name, systemImage: entry.isDir ? "folder.fill" : "doc.text")
+                                            .frame(maxWidth: .infinity, alignment: .leading)
                                     }
-                                } label: {
-                                    Label(entry.name, systemImage: entry.isDir ? "folder.fill" : "doc.text")
-                                        .frame(maxWidth: .infinity, alignment: .leading)
                                 }
+                                .listStyle(.plain)
+                                .scrollDismissesKeyboard(.immediately)
                             }
-                            .listStyle(.plain)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .overlay {
+                            if searchFocused {
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { dismissSearch() }
+                            }
                         }
                     }
                 }
@@ -913,6 +957,7 @@ private struct DocsTab: View {
                 if let parentPath {
                     ToolbarItem(placement: .topBarLeading) {
                         Button {
+                            dismissSearch()
                             Task { await model.listDocs(at: parentPath) }
                         } label: {
                             Label("상위", systemImage: "chevron.up")
@@ -921,7 +966,14 @@ private struct DocsTab: View {
                 }
                 RefreshButton(model: model)
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { composing = true } label: { Image(systemName: "plus") }
+                    Button {
+                        dismissSearch()
+                        composing = true
+                    } label: { Image(systemName: "plus") }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("완료") { dismissSearch() }
                 }
             }
             .refreshable { await model.refreshHomeData(forceNetwork: true) }
@@ -1123,6 +1175,28 @@ private struct TalkTab: View {
     }
 }
 
+private struct DueOnField: View {
+    @Binding var dueOn: String
+
+    private var dateBinding: Binding<Date> {
+        Binding(
+            get: { parseDueOnDate(dueOn) ?? Date() },
+            set: { dueOn = formatDueOnDate($0) }
+        )
+    }
+
+    var body: some View {
+        HStack {
+            DatePicker("납기", selection: dateBinding, displayedComponents: .date)
+                .datePickerStyle(.compact)
+            if !dueOnInput(dueOn).isEmpty {
+                Button("지우기") { dueOn = "" }
+                    .font(.footnote)
+            }
+        }
+    }
+}
+
 private struct ComposeSheet: View {
     @Environment(\.dismiss) private var dismiss
     let title: String
@@ -1196,6 +1270,12 @@ private struct TaskRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(task.title).font(.headline)
+            if !task.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(task.body)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
             HStack(spacing: 8) {
                 Text(taskLane(status: task.status).title)
                     .font(.caption.weight(.semibold))

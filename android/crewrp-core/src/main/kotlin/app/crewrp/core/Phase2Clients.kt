@@ -223,6 +223,7 @@ data class TaskCard(
     val dueOn: String?,
     val issueNumber: Int? = null,
     val contentId: String? = null,
+    val body: String = "",
 )
 
 class ProjectsClient(
@@ -487,7 +488,16 @@ class ProjectsClient(
             dueOn = dueOn,
             token = token,
         )
-        return TaskCard(itemId, title, statusLabel, dueOn, number, nodeId)
+        return TaskCard(itemId, title, statusLabel, dueOn, number, nodeId, body)
+    }
+
+    fun updateIssue(owner: String, repo: String, issueNumber: Int, title: String, body: String, token: String) {
+        val payload = buildJsonObject {
+            put("title", title)
+            put("body", body)
+        }.toString()
+        val result = transport.rest("PATCH", "$apiBase/repos/$owner/$repo/issues/$issueNumber", token, payload)
+        require(result.status in 200..299) { "github http ${result.status}" }
     }
 
     fun updateTaskFields(
@@ -578,7 +588,7 @@ class ProjectsClient(
                     nodes{
                       id
                       content{
-                        ... on Issue { title number id }
+                        ... on Issue { title body number id }
                       }
                       fieldValues(first:20){
                         nodes{
@@ -616,6 +626,7 @@ class ProjectsClient(
             val id = element["id"].textOrNull() ?: return@mapNotNull null
             val content = element["content"]?.takeUnless { it is JsonNull }?.jsonObject
             val title = content?.get("title").textOrNull() ?: "(제목 없음)"
+            val body = content?.get("body").textOrNull().orEmpty()
             val issueNumber = content?.get("number")?.let {
                 (it as? JsonPrimitive)?.content?.toIntOrNull()
             }
@@ -631,7 +642,7 @@ class ProjectsClient(
                     due == null -> fieldEl["date"].textOrNull()?.let { due = it }
                 }
             }
-            TaskCard(id, title, status, due, issueNumber, contentId)
+            TaskCard(id, title, status, due, issueNumber, contentId, body)
         }
     }
 }

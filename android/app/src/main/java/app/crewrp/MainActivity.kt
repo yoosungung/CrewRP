@@ -209,10 +209,12 @@ class MainActivity : ComponentActivity() {
                                     runWrite { it.updateNotice(notice.id, title, body) }
                                 },
                                 onDeleteNotice = { notice -> runWrite { it.deleteNotice(notice.id) } },
-                                onCreateTask = { title, due -> runWrite { it.createTask(title, due) } },
-                                onUpdateTask = { card, status, due ->
+                                onCreateTask = { title, body, status, due ->
+                                    runWrite { it.createTask(title, body, status, due) }
+                                },
+                                onUpdateTask = { card, title, body, status, due ->
                                     val meta = content.projectMeta ?: return@CrewActions
-                                    runWrite { it.updateTask(meta, card, status, due) }
+                                    runWrite { it.updateTask(meta, card, title, body, status, due) }
                                 },
                                 onDeleteTask = { card ->
                                     val meta = content.projectMeta ?: return@CrewActions

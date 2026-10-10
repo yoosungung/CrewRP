@@ -34,6 +34,28 @@ public func dueOnInput(_ iso: String?) -> String {
     return String(iso.prefix(10))
 }
 
+/// `YYYY-MM-DD` → 자정 `Date`. 형식이 아니면 nil.
+public func parseDueOnDate(_ text: String, calendar: Calendar = .current) -> Date? {
+    let t = dueOnInput(text)
+    guard t.count == 10 else { return nil }
+    let parts = t.split(separator: "-")
+    guard parts.count == 3,
+          let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2])
+    else { return nil }
+    var components = DateComponents()
+    components.year = y
+    components.month = m
+    components.day = d
+    return calendar.date(from: components)
+}
+
+/// 납기 저장용 `YYYY-MM-DD`.
+public func formatDueOnDate(_ date: Date, calendar: Calendar = .current) -> String {
+    let c = calendar.dateComponents([.year, .month, .day], from: date)
+    guard let y = c.year, let m = c.month, let d = c.day else { return "" }
+    return String(format: "%04d-%02d-%02d", y, m, d)
+}
+
 /// GitHub Projects v2 날짜 필드 표시 이름 (기본값은 "Due date").
 public func isProjectsDueFieldName(_ name: String?) -> Bool {
     guard let name else { return false }

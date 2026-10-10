@@ -176,10 +176,18 @@ class CrewWriter(
     fun deleteNotice(id: String) =
         DiscussionsClient(transport).deleteNotice(id, token)
 
-    fun createTask(title: String, dueOn: String?): TaskCard =
-        projects.createTask(owner, repo, title, "", resolvedProjectNumber(), token, dueOn)
+    fun createTask(title: String, body: String, statusLabel: String, dueOn: String?): TaskCard =
+        projects.createTask(owner, repo, title, body, resolvedProjectNumber(), token, dueOn, statusLabel)
 
-    fun updateTask(meta: ProjectFieldMeta, card: TaskCard, statusLabel: String, dueOn: String?) {
+    fun updateTask(
+        meta: ProjectFieldMeta,
+        card: TaskCard,
+        title: String,
+        body: String,
+        statusLabel: String,
+        dueOn: String?,
+    ) {
+        card.issueNumber?.let { projects.updateIssue(owner, repo, it, title, body, token) }
         val ready = if (dueOn != null) {
             projects.ensureDueDateField(meta, session.org, resolvedProjectNumber(), token)
         } else {

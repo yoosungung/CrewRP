@@ -481,6 +481,9 @@ class ShellPresentationTest {
         assertEquals("접수", taskStatusChoice("Todo"))
         assertEquals("2026-10-06", dueOnInput("2026-10-06T09:00:00"))
         assertEquals("", dueOnInput(null))
+        assertEquals("2026-10-06", formatDueOnDate(parseDueOnDate("2026-10-06")!!))
+        assertEquals(null, parseDueOnDate(""))
+        assertEquals(null, parseDueOnDate("nope"))
     }
 
     @Test
@@ -562,7 +565,7 @@ class ShellPresentationTest {
     fun listTasksReadsStatusAndSkipsMissingProject() {
         val payload = """
             {"data":{"organization":{"projectV2":{"items":{"nodes":[
-              {"id":"t1","content":{"title":"보고서"},"fieldValues":{"nodes":[
+              {"id":"t1","content":{"title":"보고서","body":"세부"},"fieldValues":{"nodes":[
                 {"name":"In Progress","field":{"name":"Status"}},
                 {"date":"2026-09-27","field":{"name":"Due"}}
               ]}}
@@ -575,6 +578,7 @@ class ShellPresentationTest {
         })
         val cards = client.listTasks("crew", 1, "tok")
         assertEquals("보고서", cards.single().title)
+        assertEquals("세부", cards.single().body)
         assertEquals("2026-09-27", cards.single().dueOn)
         assertEquals(TaskLane.DOING, taskLane(cards.single().status))
 

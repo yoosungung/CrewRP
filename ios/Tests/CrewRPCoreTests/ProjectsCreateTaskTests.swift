@@ -57,7 +57,7 @@ struct ProjectsCreateTaskTests {
                 )
             }
             return (
-                Data(#"{"data":{"user":{"projectV2":{"items":{"nodes":[{"id":"t1","content":{"title":"보고서"},"fieldValues":{"nodes":[{"name":"접수","field":{"name":"Status"}},{"date":"2026-10-07","field":{"name":"Due date"}}]}}]}}}}}"#.utf8),
+                Data(#"{"data":{"user":{"projectV2":{"items":{"nodes":[{"id":"t1","content":{"title":"보고서","body":"세부"},"fieldValues":{"nodes":[{"name":"접수","field":{"name":"Status"}},{"date":"2026-10-07","field":{"name":"Due date"}}]}}]}}}}}"#.utf8),
                 HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             )
         }
@@ -69,6 +69,7 @@ struct ProjectsCreateTaskTests {
         let cards = try await client.listTasks(org: "yoosungung", projectNumber: 1, token: "tok")
         #expect(cards.count == 1)
         #expect(cards.first?.dueOn == "2026-10-07")
+        #expect(cards.first?.body == "세부")
     }
 
     @Test("loadFieldMeta uses DATE dataType when name is not Due")

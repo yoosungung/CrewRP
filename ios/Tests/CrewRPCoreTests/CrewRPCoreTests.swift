@@ -611,6 +611,11 @@ struct ShellPresentationTests {
         #expect(taskStatusChoice(status: "Todo") == "접수")
         #expect(dueOnInput("2026-10-06T09:00:00") == "2026-10-06")
         #expect(dueOnInput(nil) == "")
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        #expect(formatDueOnDate(parseDueOnDate("2026-10-06", calendar: cal)!, calendar: cal) == "2026-10-06")
+        #expect(parseDueOnDate("") == nil)
+        #expect(parseDueOnDate("nope") == nil)
     }
 
     @Test("home keeps today, upcoming, and three notices")

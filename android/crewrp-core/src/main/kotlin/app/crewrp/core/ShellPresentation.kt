@@ -1,5 +1,7 @@
 package app.crewrp.core
 
+import java.time.LocalDate
+
 enum class TaskLane(val title: String) {
     INBOX("접수"),
     DOING("진행 중"),
@@ -22,6 +24,16 @@ fun taskStatusChoice(status: String): String = taskLane(status).title
 
 /** 상세 납기 입력값. Projects Due는 YYYY-MM-DD. */
 fun dueOnInput(iso: String?): String = iso?.take(10).orEmpty()
+
+/** `YYYY-MM-DD` → LocalDate. 형식이 아니면 null. */
+fun parseDueOnDate(text: String): LocalDate? {
+    val t = dueOnInput(text)
+    if (t.length != 10) return null
+    return runCatching { LocalDate.parse(t) }.getOrNull()
+}
+
+/** 납기 저장용 `YYYY-MM-DD`. */
+fun formatDueOnDate(date: LocalDate): String = date.toString()
 
 fun roleLabel(role: TeamRole): String = if (role == TeamRole.ADMIN) "운영진" else "멤버"
 

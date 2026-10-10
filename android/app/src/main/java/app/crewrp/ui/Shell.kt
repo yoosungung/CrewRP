@@ -4,6 +4,7 @@ package app.crewrp.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,10 +20,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
@@ -37,6 +41,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,6 +65,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,11 +75,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setText
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -88,21 +104,25 @@ import app.crewrp.core.DocEntry
 import app.crewrp.core.docBlocks
 import app.crewrp.core.dueOnInput
 import app.crewrp.core.formatDue
+import app.crewrp.core.formatDueOnDate
 import app.crewrp.core.homeSections
 import app.crewrp.core.kanbanUsesStackedLanes
 import app.crewrp.core.listedDocs
 import app.crewrp.core.parentDocsPath
+import app.crewrp.core.parseDueOnDate
 import app.crewrp.core.roleLabel
 import app.crewrp.core.taskLane
 import app.crewrp.core.taskStatusChoice
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneOffset
 
 data class CrewActions(
     val onCreateNotice: (title: String, body: String) -> Unit,
     val onUpdateNotice: (Notice, title: String, body: String) -> Unit,
     val onDeleteNotice: (Notice) -> Unit,
-    val onCreateTask: (title: String, dueOn: String?) -> Unit,
-    val onUpdateTask: (TaskCard, status: String, dueOn: String?) -> Unit,
+    val onCreateTask: (title: String, body: String, status: String, dueOn: String?) -> Unit,
+    val onUpdateTask: (TaskCard, title: String, body: String, status: String, dueOn: String?) -> Unit,
     val onDeleteTask: (TaskCard) -> Unit,
     val onSaveDoc: (path: String, content: String) -> Unit,
     val onDeleteDoc: () -> Unit,
@@ -308,11 +328,13 @@ fun CrewShell(
             onDismiss = { compose = null },
             onSubmit = { t, b -> actions.onCreateNotice(t, b); compose = null },
         )
-        ComposeKind.Task -> FormDialog(
+        ComposeKind.Task -> TaskFormDialog(
             title = "할 일 추가",
-            dueField = true,
             onDismiss = { compose = null },
-            onSubmit = { t, due -> actions.onCreateTask(t, due.takeIf { it.isNotBlank() }); compose = null },
+            onSubmit = { t, body, status, due ->
+                actions.onCreateTask(t, body, status, due)
+                compose = null
+            },
         )
         ComposeKind.Doc -> FormDialog(
             title = "자료 저장",
@@ -357,12 +379,13 @@ fun CrewShell(
         )
     }
     editingTask?.let { task ->
-        TaskEditDialog(
+        TaskFormDialog(
+            title = "할 일 수정",
             task = task,
             showDelete = session.teamRole == TeamRole.ADMIN,
             onDismiss = { editingTask = null },
-            onSubmit = { status, due ->
-                actions.onUpdateTask(task, status, due)
+            onSubmit = { t, body, status, due ->
+                actions.onUpdateTask(task, t, body, status, due)
                 editingTask = null
             },
             onDelete = { actions.onDeleteTask(task); editingTask = null },
@@ -382,36 +405,66 @@ fun CrewShell(
 
 private enum class ComposeKind { Notice, Task, Doc }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TaskEditDialog(
-    task: TaskCard,
-    showDelete: Boolean,
+private fun TaskFormDialog(
+    title: String,
     onDismiss: () -> Unit,
-    onSubmit: (status: String, dueOn: String?) -> Unit,
-    onDelete: () -> Unit,
+    onSubmit: (title: String, body: String, status: String, dueOn: String?) -> Unit,
+    task: TaskCard? = null,
+    showDelete: Boolean = false,
+    onDelete: (() -> Unit)? = null,
 ) {
-    var status by remember { mutableStateOf(taskStatusChoice(task.status)) }
-    var due by remember { mutableStateOf(dueOnInput(task.dueOn)) }
+    var fieldTitle by remember { mutableStateOf(task?.title.orEmpty()) }
+    var fieldBody by remember { mutableStateOf(task?.body.orEmpty()) }
+    var status by remember { mutableStateOf(task?.let { taskStatusChoice(it.status) } ?: TaskLane.INBOX.title) }
+    var due by remember { mutableStateOf(dueOnInput(task?.dueOn)) }
+    var statusExpanded by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("할 일 수정") },
+        title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(task.title, {}, label = { Text("제목") }, enabled = false, modifier = Modifier.fillMaxWidth())
-                Text("상태", style = MaterialTheme.typography.labelMedium)
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    TaskLane.entries.forEachIndexed { index, lane ->
-                        SegmentedButton(
-                            selected = status == lane.title,
-                            onClick = { status = lane.title },
-                            shape = SegmentedButtonDefaults.itemShape(index, TaskLane.entries.size),
-                        ) { Text(lane.title) }
+                OutlinedTextField(
+                    fieldTitle,
+                    { fieldTitle = it },
+                    label = { Text("제목") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    fieldBody,
+                    { fieldBody = it },
+                    label = { Text("내용") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                )
+                ExposedDropdownMenuBox(expanded = statusExpanded, onExpandedChange = { statusExpanded = it }) {
+                    OutlinedTextField(
+                        value = status,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("상태") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = statusExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(type = MenuAnchorType.PrimaryNotEditable),
+                    )
+                    ExposedDropdownMenu(expanded = statusExpanded, onDismissRequest = { statusExpanded = false }) {
+                        TaskLane.entries.forEach { lane ->
+                            DropdownMenuItem(
+                                text = { Text(lane.title) },
+                                onClick = {
+                                    status = lane.title
+                                    statusExpanded = false
+                                },
+                            )
+                        }
                     }
                 }
-                OutlinedTextField(
-                    due,
-                    { due = it },
-                    label = { Text("납기 (YYYY-MM-DD)") },
+                DueOnField(
+                    due = due,
+                    onDueChange = { due = it },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("taskDue")
@@ -425,20 +478,73 @@ private fun TaskEditDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val trimmed = dueOnInput(due)
-                onSubmit(status, trimmed.ifBlank { null })
-            }) { Text("저장") }
+            TextButton(
+                onClick = {
+                    val trimmed = dueOnInput(due)
+                    onSubmit(fieldTitle, fieldBody, status, trimmed.ifBlank { null })
+                },
+                enabled = fieldTitle.isNotBlank(),
+            ) { Text("저장") }
         },
         dismissButton = {
             Row {
-                if (showDelete) {
+                if (showDelete && onDelete != null) {
                     TextButton(onClick = onDelete) { Text("삭제") }
                 }
                 TextButton(onClick = onDismiss) { Text("닫기") }
             }
         },
     )
+}
+
+@Composable
+private fun DueOnField(
+    due: String,
+    onDueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var showPicker by remember { mutableStateOf(false) }
+    val initialMillis = parseDueOnDate(due)
+        ?.atStartOfDay(ZoneOffset.UTC)
+        ?.toInstant()
+        ?.toEpochMilli()
+    Row(
+        modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            if (dueOnInput(due).isEmpty()) "납기 없음" else formatDue(due),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        if (dueOnInput(due).isNotEmpty()) {
+            TextButton(onClick = { onDueChange("") }) { Text("지우기") }
+        }
+        IconButton(onClick = { showPicker = true }) {
+            Icon(Icons.Filled.CalendarMonth, contentDescription = "캘린더")
+        }
+    }
+    if (showPicker) {
+        val state = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+        DatePickerDialog(
+            onDismissRequest = { showPicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { millis ->
+                        val local = Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
+                        onDueChange(formatDueOnDate(local))
+                    }
+                    showPicker = false
+                }) { Text("선택") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPicker = false }) { Text("취소") }
+            },
+        ) {
+            DatePicker(state = state)
+        }
+    }
 }
 
 @Composable
@@ -450,33 +556,23 @@ private fun FormDialog(
     bodyLabel: String = "본문",
     initialTitle: String = "",
     initialBody: String = "",
-    initialDue: String = "",
-    dueField: Boolean = false,
     titleEnabled: Boolean = true,
     showDelete: Boolean = false,
     onDelete: (() -> Unit)? = null,
 ) {
     var t by remember { mutableStateOf(initialTitle) }
-    var b by remember { mutableStateOf(if (dueField) initialDue else initialBody) }
-    var status by remember { mutableStateOf(initialBody) }
+    var b by remember { mutableStateOf(initialBody) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(t, { t = it }, label = { Text(titleLabel) }, enabled = titleEnabled, modifier = Modifier.fillMaxWidth())
-                if (dueField) {
-                    OutlinedTextField(status, { status = it }, label = { Text(bodyLabel) }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(b, { b = it }, label = { Text("마감 (YYYY-MM-DD)") }, modifier = Modifier.fillMaxWidth())
-                } else {
-                    OutlinedTextField(b, { b = it }, label = { Text(bodyLabel) }, modifier = Modifier.fillMaxWidth(), minLines = 3)
-                }
+                OutlinedTextField(b, { b = it }, label = { Text(bodyLabel) }, modifier = Modifier.fillMaxWidth(), minLines = 3)
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                if (dueField) onSubmit(t, b) else onSubmit(t, b)
-            }) { Text("저장") }
+            TextButton(onClick = { onSubmit(t, b) }) { Text("저장") }
         },
         dismissButton = {
             Row {
@@ -562,7 +658,12 @@ private fun TasksTab(content: CrewContent, modifier: Modifier, onRetry: () -> Un
                         }
                     }
                 } else {
-                    LazyRow(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    LazyRow(
+                        Modifier.weight(1f),
+                        contentPadding = PaddingValues(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
                         items(TaskLane.entries) { lane ->
                             KanbanLane(content.tasks, lane, Modifier.width(260.dp), onOpen)
                         }
@@ -601,9 +702,17 @@ private fun DocsTab(
     onOpenDetail: () -> Unit,
 ) {
     var search by remember { mutableStateOf("") }
+    var searchFocused by remember { mutableStateOf(false) }
     var pendingPath by remember { mutableStateOf<String?>(null) }
     val listed = listedDocs(content.docs, content.docsTree, search)
     val parent = parentDocsPath(content.docsDirPath)
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    fun dismissSearch() {
+        searchFocused = false
+        focusManager.clearFocus()
+        keyboard?.hide()
+    }
     LaunchedEffect(content.docPath, content.doc, pendingPath) {
         val want = pendingPath ?: return@LaunchedEffect
         if (content.docPath == want) {
@@ -621,39 +730,63 @@ private fun DocsTab(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (parent != null) {
-                    IconButton(onClick = { actions.onListDocs(parent) }) {
+                    IconButton(onClick = {
+                        dismissSearch()
+                        actions.onListDocs(parent)
+                    }) {
                         Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "상위")
                     }
                 }
                 OutlinedTextField(
                     search,
                     { search = it },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .onFocusChanged { searchFocused = it.isFocused },
                     label = { Text("이름·경로 검색") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { dismissSearch() }),
                 )
             }
-            if (listed.isEmpty()) {
-                EmptyPane(
-                    Modifier.weight(1f),
-                    if (content.docs.isEmpty()) "자료실이 비어 있습니다" else "검색 결과가 없습니다",
-                    if (content.docs.isEmpty()) "+ 로 자료를 추가하세요." else "다른 검색어를 입력해 보세요.",
-                )
-            } else {
-                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
-                    items(listed, key = { it.path }) { entry ->
-                        DocRow(
-                            entry = entry,
-                            onClick = {
-                                if (entry.isDir) {
-                                    actions.onListDocs(entry.path)
-                                } else {
-                                    pendingPath = entry.path
-                                    actions.onOpenDoc(entry.path)
-                                }
-                            },
-                        )
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (listed.isEmpty()) {
+                    EmptyPane(
+                        Modifier.fillMaxSize(),
+                        if (content.docs.isEmpty()) "자료실이 비어 있습니다" else "검색 결과가 없습니다",
+                        if (content.docs.isEmpty()) "+ 로 자료를 추가하세요." else "다른 검색어를 입력해 보세요.",
+                    )
+                } else {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        items(listed, key = { it.path }) { entry ->
+                            DocRow(
+                                entry = entry,
+                                onClick = {
+                                    dismissSearch()
+                                    if (entry.isDir) {
+                                        actions.onListDocs(entry.path)
+                                    } else {
+                                        pendingPath = entry.path
+                                        actions.onOpenDoc(entry.path)
+                                    }
+                                },
+                            )
+                        }
                     }
+                }
+                if (searchFocused) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { dismissSearch() },
+                            ),
+                    )
                 }
             }
         }
@@ -794,6 +927,15 @@ private fun TaskRow(task: TaskCard) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(task.title, style = MaterialTheme.typography.titleMedium)
+            if (task.body.isNotBlank()) {
+                Text(
+                    task.body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
                     Text(lane.title, Modifier.padding(horizontal = 8.dp, vertical = 2.dp), style = MaterialTheme.typography.labelMedium)
