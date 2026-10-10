@@ -86,6 +86,93 @@ class DocsClient(
         }
     }
 
+    /** `/docs` 이하 재귀 목록(검색 인덱스). TTL·tree SHA로 네트워크를 줄인다. */
+    fun listDocsTree(
+        owner: String,
+        repo: String,
+        token: String,
+        prefix: String = "docs",
+        forceNetwork: Boolean = false,
+        now: Instant = Instant.now(),
+    ): List<DocEntry> {
+        val queryName = GraphQLFreshness.docsTreeQueryName(owner, repo)
+        if (!forceNetwork) {
+            GraphQLFreshness.freshBody(cache, queryName, now)?.let { body ->
+                return runCatching {
+                    json.decodeFromString(ListSerializer(DocEntry.serializer()), body)
+                }.getOrNull() ?: emptyList()
+            }
+        }
+
+        val branch = try {
+            defaultBranch(owner, repo, token)
+        } catch (e: IllegalArgumentException) {
+            if (e.message?.contains("404") == true) return emptyList()
+            throw e
+        }
+
+        if (!forceNetwork) {
+            val storedSha = GraphQLFreshness.storedCursor(cache, queryName)
+            val cached = GraphQLFreshness.cachedBody(cache, queryName)
+            if (storedSha != null && cached != null) {
+                val entries = runCatching {
+                    json.decodeFromString(ListSerializer(DocEntry.serializer()), cached)
+                }.getOrNull()
+                if (entries != null) {
+                    try {
+                        val shallow = fetchGitTree(owner, repo, branch, token, recursive = false)
+                        if (shallow.first == storedSha) {
+                            GraphQLFreshness.store(cache, queryName, cached, now, storedSha)
+                            return entries
+                        }
+                    } catch (e: IllegalArgumentException) {
+                        if (e.message?.contains("404") == true) return emptyList()
+                    }
+                }
+            }
+        }
+
+        val tree = try {
+            fetchGitTree(owner, repo, branch, token, recursive = true)
+        } catch (e: IllegalArgumentException) {
+            if (e.message?.contains("404") == true) return emptyList()
+            throw e
+        }
+        val entries = docsEntriesFromGitTree(tree.second, prefix)
+        val body = json.encodeToString(ListSerializer(DocEntry.serializer()), entries)
+        GraphQLFreshness.store(cache, queryName, body, now, tree.first)
+        return entries
+    }
+
+    private fun defaultBranch(owner: String, repo: String, token: String): String {
+        val response = rest.get("$apiBase/repos/$owner/$repo", token)
+        return json.parseToJsonElement(response.body).jsonObject["default_branch"]?.jsonPrimitive?.content
+            ?: error("missing default_branch")
+    }
+
+    private fun fetchGitTree(
+        owner: String,
+        repo: String,
+        ref: String,
+        token: String,
+        recursive: Boolean,
+    ): Pair<String, List<GitTreeNode>> {
+        val url = buildString {
+            append("$apiBase/repos/$owner/$repo/git/trees/$ref")
+            if (recursive) append("?recursive=1")
+        }
+        val response = rest.get(url, token)
+        val obj = json.parseToJsonElement(response.body).jsonObject
+        val sha = obj["sha"]?.jsonPrimitive?.content ?: error("missing tree sha")
+        val nodes = obj["tree"]?.jsonArray.orEmpty().mapNotNull { el ->
+            if (el !is JsonObject) return@mapNotNull null
+            val path = el["path"].textOrNull() ?: return@mapNotNull null
+            val type = el["type"].textOrNull() ?: return@mapNotNull null
+            GitTreeNode(path, type, el["sha"].textOrNull())
+        }
+        return sha to nodes
+    }
+
     fun fetchMarkdown(owner: String, repo: String, path: String, token: String): DocFile {
         val url = "$apiBase/repos/$owner/$repo/contents/$path"
         val response = rest.get(url, token)

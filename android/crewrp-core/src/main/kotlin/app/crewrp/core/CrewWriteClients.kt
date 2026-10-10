@@ -17,7 +17,22 @@ import kotlinx.serialization.json.putJsonObject
 
 data class DiscussionSetup(val repositoryId: String, val categoryId: String)
 
+@Serializable
 data class DocEntry(val path: String, val name: String, val sha: String?, val isDir: Boolean)
+
+data class GitTreeNode(val path: String, val type: String, val sha: String? = null)
+
+/** Git Trees 응답에서 `/docs` 이하 blob·tree만 DocEntry로 남긴다. */
+fun docsEntriesFromGitTree(nodes: List<GitTreeNode>, prefix: String = "docs"): List<DocEntry> {
+    val root = prefix.trim('/')
+    if (root.isEmpty()) return emptyList()
+    return nodes.mapNotNull { node ->
+        val path = node.path.trim('/')
+        if (path != root && !path.startsWith("$root/")) return@mapNotNull null
+        if (node.type != "blob" && node.type != "tree") return@mapNotNull null
+        DocEntry(path, path.substringAfterLast('/'), node.sha, node.type == "tree")
+    }
+}
 
 data class ProjectFieldMeta(
     val projectId: String,

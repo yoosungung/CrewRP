@@ -516,6 +516,65 @@ struct CrewRegistrationFixtureTests {
             .fetchMarkdown(owner: "crew", repo: "box", path: "docs/README.md", token: "t")
         #expect(doc.content.contains("자료실"))
     }
+
+    @Test("listDocsTree filters recursive tree; TTL then SHA skip recursive")
+    func listDocsTreeCachesBySha() async throws {
+        let cache = try CacheStore(path: ":memory:")
+        let transport = MockHTTPTransport()
+        final class HitCounter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func increment() {
+                lock.lock()
+                value += 1
+                lock.unlock()
+            }
+            var count: Int {
+                lock.lock()
+                defer { lock.unlock() }
+                return value
+            }
+        }
+        let recursiveHits = HitCounter()
+        let now = Date(timeIntervalSince1970: 1_000)
+        transport.handler = { request in
+            let path = request.url!.path
+            let query = request.url!.query ?? ""
+            if path.hasSuffix("/repos/crew/box") {
+                let body = Data(#"{"default_branch":"main"}"#.utf8)
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["ETag": "\"r1\""])!)
+            }
+            if path.hasSuffix("/git/trees/main") {
+                if query.contains("recursive") {
+                    recursiveHits.increment()
+                    let body = Data(#"""
+                    {"sha":"tree1","tree":[
+                      {"path":"docs","type":"tree","sha":"d0"},
+                      {"path":"docs/guides/onboard.md","type":"blob","sha":"b1"},
+                      {"path":"src/a.kt","type":"blob","sha":"x"}
+                    ],"truncated":false}
+                    """#.utf8)
+                    return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["ETag": "\"t1\""])!)
+                }
+                let body = Data(#"{"sha":"tree1","tree":[{"path":"docs","type":"tree","sha":"d0"}],"truncated":false}"#.utf8)
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["ETag": "\"s1\""])!)
+            }
+            Issue.record("unexpected \(path)?\(query)")
+            throw URLError(.badURL)
+        }
+        let client = DocsClient(transport: transport, cache: cache)
+        let first = try await client.listDocsTree(owner: "crew", repo: "box", token: "t", forceNetwork: true, now: now)
+        #expect(first.map(\.path) == ["docs", "docs/guides/onboard.md"])
+        #expect(recursiveHits.count == 1)
+
+        let fresh = try await client.listDocsTree(owner: "crew", repo: "box", token: "t", forceNetwork: false, now: now.addingTimeInterval(30))
+        #expect(fresh.map(\.path) == ["docs", "docs/guides/onboard.md"])
+        #expect(recursiveHits.count == 1)
+
+        let afterTtl = try await client.listDocsTree(owner: "crew", repo: "box", token: "t", forceNetwork: false, now: now.addingTimeInterval(120))
+        #expect(afterTtl.map(\.path) == ["docs", "docs/guides/onboard.md"])
+        #expect(recursiveHits.count == 1)
+    }
 }
 
 @Suite("DiscordDeepLink")
@@ -587,6 +646,31 @@ struct ShellPresentationTests {
         #expect(filterDocs(entries, query: "GUIDE").map(\.path) == ["docs/guides", "docs/guides/onboard.md"])
         #expect(filterDocs(entries, query: "readme").map(\.name) == ["README.md"])
         #expect(filterDocs(entries, query: "   ").count == 4)
+    }
+
+    @Test("listedDocs uses folder when query empty else tree index")
+    func listedDocsSwitchesSource() {
+        let folder = [DocEntry(path: "docs/notes.md", name: "notes.md", sha: nil, isDir: false)]
+        let tree = [
+            DocEntry(path: "docs/guides/onboard.md", name: "onboard.md", sha: nil, isDir: false),
+            DocEntry(path: "docs/notes.md", name: "notes.md", sha: nil, isDir: false),
+        ]
+        #expect(listedDocs(folderEntries: folder, treeEntries: tree, query: "").map(\.path) == ["docs/notes.md"])
+        #expect(listedDocs(folderEntries: folder, treeEntries: tree, query: "onboard").map(\.path) == ["docs/guides/onboard.md"])
+    }
+
+    @Test("docsEntriesFromGitTree keeps docs prefix blob and tree only")
+    func docsEntriesFromGitTreeFilters() {
+        let nodes = [
+            GitTreeNode(path: "README.md", type: "blob", sha: "a"),
+            GitTreeNode(path: "docs", type: "tree", sha: "t0"),
+            GitTreeNode(path: "docs/guides", type: "tree", sha: "t1"),
+            GitTreeNode(path: "docs/guides/onboard.md", type: "blob", sha: "b1"),
+            GitTreeNode(path: "src/main.kt", type: "blob", sha: "c"),
+        ]
+        let entries = docsEntriesFromGitTree(nodes)
+        #expect(entries.map(\.path) == ["docs", "docs/guides", "docs/guides/onboard.md"])
+        #expect(entries.map(\.isDir) == [true, true, false])
     }
 
     @Test("parentDocsPath walks up until docs root")

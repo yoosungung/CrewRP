@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     @Published var docPath: String = "docs/README.md"
     @Published var docSha: String?
     @Published var docs: [DocEntry] = []
+    @Published var docsTree: [DocEntry] = []
     @Published var docsDirPath: String = "docs"
     @Published var threadMessages: [ThreadMessage] = []
     @Published var isLoading = false
@@ -121,6 +122,7 @@ final class AppModel: ObservableObject {
         tasks = []
         notices = []
         docs = []
+        docsTree = []
         docsDirPath = "docs"
         threadMessages = []
         currentLogin = nil
@@ -155,6 +157,7 @@ final class AppModel: ObservableObject {
             var noticesFailed = false
             var discussionSetup: DiscussionSetup?
             var docs: [DocEntry] = []
+            var docsTree: [DocEntry] = []
             var docsDirPath: String
             var docFailed = false
             var talkIssueNumber = 1
@@ -210,17 +213,24 @@ final class AppModel: ObservableObject {
                 }
             }()
 
-            async let docsTask: (entries: [DocEntry], dir: String, failed: Bool) = {
+            async let docsTask: (entries: [DocEntry], tree: [DocEntry], dir: String, failed: Bool) = {
                 let docsClient = DocsClient(transport: transport, cache: cache)
+                let entries: [DocEntry]
+                var folderFailed = false
                 do {
-                    let entries = try await docsClient.listDocs(owner: owner, repo: repo, token: token, path: listPath)
-                    return (entries, listPath, false)
+                    entries = try await docsClient.listDocs(owner: owner, repo: repo, token: token, path: listPath)
                 } catch {
                     if case GitHubAPIError.httpStatus(404) = error {
-                        return ([], listPath, false)
+                        entries = []
+                    } else {
+                        entries = []
+                        folderFailed = true
                     }
-                    return ([], listPath, true)
                 }
+                let tree = (try? await docsClient.listDocsTree(
+                    owner: owner, repo: repo, token: token, forceNetwork: forceNetwork
+                )) ?? []
+                return (entries, tree, listPath, folderFailed)
             }()
 
             async let talkTask: (issue: Int, messages: [ThreadMessage], failed: Bool) = {
@@ -249,6 +259,7 @@ final class AppModel: ObservableObject {
                 noticesFailed: notices.failed,
                 discussionSetup: notices.setup,
                 docs: docs.entries,
+                docsTree: docs.tree,
                 docsDirPath: docs.dir,
                 docFailed: docs.failed,
                 talkIssueNumber: talk.issue,
@@ -271,6 +282,9 @@ final class AppModel: ObservableObject {
         if !snapshot.docFailed || docs.isEmpty {
             docs = snapshot.docs
             docsDirPath = snapshot.docsDirPath
+        }
+        if !snapshot.docFailed || docsTree.isEmpty {
+            docsTree = snapshot.docsTree
         }
         docFailed = snapshot.docFailed
         if !snapshot.threadsFailed || threadMessages.isEmpty {
@@ -845,7 +859,9 @@ private struct DocsTab: View {
     @State private var showingDetail = false
     @State private var search = ""
 
-    private var listed: [DocEntry] { filterDocs(model.docs, query: search) }
+    private var listed: [DocEntry] {
+        listedDocs(folderEntries: model.docs, treeEntries: model.docsTree, query: search)
+    }
     private var parentPath: String? { parentDocsPath(model.docsDirPath) }
 
     var body: some View {

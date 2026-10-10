@@ -15,16 +15,31 @@ object GraphQLFreshness {
     fun listNoticesQueryName(owner: String, repo: String): String =
         "listNotices:$owner/$repo"
 
+    fun docsTreeQueryName(owner: String, repo: String): String =
+        "docsTree:$owner/$repo"
+
     fun freshBody(cache: CacheStore, queryName: String, now: Instant = Instant.now()): String? {
         val row = cache.graphQLCursor(queryName) ?: return null
         if (Duration.between(row.updatedAt, now) >= ttl) return null
         return cache.cacheEntry(cacheURL(queryName))?.body
     }
 
-    fun store(cache: CacheStore, queryName: String, body: String, now: Instant = Instant.now()) {
+    fun cachedBody(cache: CacheStore, queryName: String): String? =
+        cache.cacheEntry(cacheURL(queryName))?.body
+
+    fun storedCursor(cache: CacheStore, queryName: String): String? =
+        cache.graphQLCursor(queryName)?.cursor
+
+    fun store(
+        cache: CacheStore,
+        queryName: String,
+        body: String,
+        now: Instant = Instant.now(),
+        cursor: String? = null,
+    ) {
         runCatching {
             cache.putCacheEntry(cacheURL(queryName), body, null, now)
-            cache.putGraphQLCursor(queryName, null, now)
+            cache.putGraphQLCursor(queryName, cursor, now)
         }
     }
 }

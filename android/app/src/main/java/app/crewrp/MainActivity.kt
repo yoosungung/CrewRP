@@ -149,6 +149,7 @@ class MainActivity : ComponentActivity() {
                             notices = if (loaded.noticesFailed && previous.notices.isNotEmpty()) previous.notices else loaded.notices,
                             threads = if (loaded.threadsFailed && previous.threads.isNotEmpty()) previous.threads else loaded.threads,
                             docs = if (loaded.docFailed && previous.docs.isNotEmpty()) previous.docs else loaded.docs,
+                            docsTree = if (loaded.docFailed && previous.docsTree.isNotEmpty()) previous.docsTree else loaded.docsTree,
                             docsDirPath = if (loaded.docFailed && previous.docs.isNotEmpty()) previous.docsDirPath else loaded.docsDirPath,
                             doc = previous.doc,
                             docPath = previous.docPath,

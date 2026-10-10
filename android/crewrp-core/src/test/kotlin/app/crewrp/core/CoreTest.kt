@@ -526,6 +526,31 @@ class ShellPresentationTest {
     }
 
     @Test
+    fun listedDocsUsesFolderWhenQueryEmptyElseTreeIndex() {
+        val folder = listOf(DocEntry("docs/notes.md", "notes.md", null, false))
+        val tree = listOf(
+            DocEntry("docs/guides/onboard.md", "onboard.md", null, false),
+            DocEntry("docs/notes.md", "notes.md", null, false),
+        )
+        assertEquals(listOf("docs/notes.md"), listedDocs(folder, tree, "").map { it.path })
+        assertEquals(listOf("docs/guides/onboard.md"), listedDocs(folder, tree, "onboard").map { it.path })
+    }
+
+    @Test
+    fun docsEntriesFromGitTreeKeepsDocsPrefixBlobAndTreeOnly() {
+        val nodes = listOf(
+            GitTreeNode("README.md", "blob", "a"),
+            GitTreeNode("docs", "tree", "t0"),
+            GitTreeNode("docs/guides", "tree", "t1"),
+            GitTreeNode("docs/guides/onboard.md", "blob", "b1"),
+            GitTreeNode("src/main.kt", "blob", "c"),
+        )
+        val entries = docsEntriesFromGitTree(nodes)
+        assertEquals(listOf("docs", "docs/guides", "docs/guides/onboard.md"), entries.map { it.path })
+        assertEquals(listOf(true, true, false), entries.map { it.isDir })
+    }
+
+    @Test
     fun parentDocsPathWalksUpUntilDocsRoot() {
         assertNull(parentDocsPath("docs"))
         assertNull(parentDocsPath("docs/"))
@@ -845,6 +870,52 @@ class ShellPresentationTest {
             assertEquals("docs/README.md", docs.listDocs("c", "r", "t").single().path)
             assertEquals("s2", docs.saveMarkdown("c", "r", "docs/a.md", "# hi", "t", null).sha)
             docs.deleteDoc("c", "r", "docs/a.md", "s2", "t")
+        }
+    }
+
+    @Test
+    fun listDocsTreeFiltersRecursiveTreeTtlThenShaSkipRecursive() {
+        JdbcCacheStore(":memory:").use { cache ->
+            var recursiveHits = 0
+            val now = Instant.ofEpochSecond(1_000)
+            val docs = DocsClient(
+                HttpTransport { method, url, _, _ ->
+                    assertEquals("GET", method)
+                    when {
+                        url.endsWith("/repos/crew/box") ->
+                            HttpResult(200, """{"default_branch":"main"}""")
+                        url.contains("/git/trees/main?recursive=1") -> {
+                            recursiveHits += 1
+                            HttpResult(
+                                200,
+                                """{"sha":"tree1","tree":[
+                                  {"path":"docs","type":"tree","sha":"d0"},
+                                  {"path":"docs/guides/onboard.md","type":"blob","sha":"b1"},
+                                  {"path":"src/a.kt","type":"blob","sha":"x"}
+                                ],"truncated":false}""",
+                            )
+                        }
+                        url.endsWith("/git/trees/main") ->
+                            HttpResult(
+                                200,
+                                """{"sha":"tree1","tree":[{"path":"docs","type":"tree","sha":"d0"}],"truncated":false}""",
+                            )
+                        else -> error(url)
+                    }
+                },
+                cache,
+            )
+            val first = docs.listDocsTree("crew", "box", "t", forceNetwork = true, now = now)
+            assertEquals(listOf("docs", "docs/guides/onboard.md"), first.map { it.path })
+            assertEquals(1, recursiveHits)
+
+            val fresh = docs.listDocsTree("crew", "box", "t", forceNetwork = false, now = now.plusSeconds(30))
+            assertEquals(listOf("docs", "docs/guides/onboard.md"), fresh.map { it.path })
+            assertEquals(1, recursiveHits)
+
+            val afterTtl = docs.listDocsTree("crew", "box", "t", forceNetwork = false, now = now.plusSeconds(120))
+            assertEquals(listOf("docs", "docs/guides/onboard.md"), afterTtl.map { it.path })
+            assertEquals(1, recursiveHits)
         }
     }
 

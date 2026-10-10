@@ -137,6 +137,12 @@ fun filterDocs(entries: List<DocEntry>, query: String): List<DocEntry> {
     return filtered.sortedWith(compareByDescending<DocEntry> { it.isDir }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 }
 
+/** 검색어 없으면 현재 폴더 목록, 있으면 Trees 재귀 인덱스에서 필터. */
+fun listedDocs(folderEntries: List<DocEntry>, treeEntries: List<DocEntry>, query: String): List<DocEntry> {
+    val q = query.trim()
+    return if (q.isEmpty()) filterDocs(folderEntries, "") else filterDocs(treeEntries, q)
+}
+
 /** `/docs` 루트면 null. 그 외 상위 path (Contents API list 대상). */
 fun parentDocsPath(path: String): String? {
     val trimmed = path.trim('/').trimEnd('/')

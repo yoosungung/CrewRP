@@ -196,6 +196,13 @@ public func filterDocs(_ entries: [DocEntry], query: String) -> [DocEntry] {
     }
 }
 
+/// 검색어 없으면 현재 폴더 목록, 있으면 Trees 재귀 인덱스에서 필터.
+public func listedDocs(folderEntries: [DocEntry], treeEntries: [DocEntry], query: String) -> [DocEntry] {
+    let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    if q.isEmpty { return filterDocs(folderEntries, query: "") }
+    return filterDocs(treeEntries, query: q)
+}
+
 /// `/docs` 루트면 nil. 그 외 상위 path (Contents API list 대상).
 public func parentDocsPath(_ path: String) -> String? {
     var trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))

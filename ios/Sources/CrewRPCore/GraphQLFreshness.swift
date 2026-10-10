@@ -17,6 +17,10 @@ public enum GraphQLFreshness {
         "listNotices:\(owner)/\(repo)"
     }
 
+    public static func docsTreeQueryName(owner: String, repo: String) -> String {
+        "docsTree:\(owner)/\(repo)"
+    }
+
     public static func freshBody(
         cache: CacheStore,
         queryName: String,
@@ -30,10 +34,20 @@ public enum GraphQLFreshness {
         return Data(entry.body.utf8)
     }
 
+    public static func cachedBody(cache: CacheStore, queryName: String) -> Data? {
+        guard let entry = try? cache.cacheEntry(url: cacheURL(queryName: queryName)) else { return nil }
+        return Data(entry.body.utf8)
+    }
+
+    public static func storedCursor(cache: CacheStore, queryName: String) -> String? {
+        try? cache.graphQLCursor(queryName: queryName)?.cursor
+    }
+
     public static func store(
         cache: CacheStore,
         queryName: String,
         body: Data,
+        cursor: String? = nil,
         now: Date = Date()
     ) {
         let text = String(data: body, encoding: .utf8) ?? ""
@@ -43,6 +57,6 @@ public enum GraphQLFreshness {
             etag: nil,
             fetchedAt: now
         )
-        try? cache.putGraphQLCursor(queryName: queryName, cursor: nil, updatedAt: now)
+        try? cache.putGraphQLCursor(queryName: queryName, cursor: cursor, updatedAt: now)
     }
 }

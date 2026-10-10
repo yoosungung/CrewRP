@@ -29,6 +29,7 @@ data class CrewContent(
     val threads: List<ThreadMessage> = emptyList(),
     val threadsFailed: Boolean = false,
     val docs: List<DocEntry> = emptyList(),
+    val docsTree: List<DocEntry> = emptyList(),
     val docsDirPath: String = "docs",
     val docPath: String = "docs/README.md",
     val doc: String = "",
@@ -109,8 +110,12 @@ fun fetchCrewContent(
             Callable {
                 val docsClient = DocsClient(transport, cache)
                 val docs = runCatching { docsClient.listDocs(owner, repo, token, docsDirPath) }
+                val tree = runCatching {
+                    docsClient.listDocsTree(owner, repo, token, forceNetwork = forceNetwork)
+                }
                 DocsBundle(
                     docs.getOrDefault(emptyList()),
+                    tree.getOrDefault(emptyList()),
                     docsDirPath,
                     docs.isFailure,
                 )
@@ -129,6 +134,7 @@ fun fetchCrewContent(
             threads = talk.first,
             threadsFailed = talk.second,
             docs = docs.entries,
+            docsTree = docs.tree,
             docsDirPath = docs.dirPath,
             docFailed = docs.failed,
             projectMeta = tasks.third,
@@ -142,6 +148,7 @@ fun fetchCrewContent(
 
 private data class DocsBundle(
     val entries: List<DocEntry>,
+    val tree: List<DocEntry>,
     val dirPath: String,
     val failed: Boolean,
 )

@@ -42,7 +42,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | 투표 참여 | 투표 | Discussion poll | 기존 poll 조회와 `addDiscussionPollVote`. 앱에서 poll 생성은 하지 않는다 |
 | 할 일 | 할 일 | Projects (v2), Issues | GraphQL. 상태 필드 값으로 접수 → 진행 중 → 완료 |
 | 행정 서식 | 서식 | Issue Forms YAML, Issues | 앱이 `.github/ISSUE_TEMPLATE` YAML을 읽어 네이티브 폼을 그린 뒤 Issue를 생성 |
-| 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` | REST Contents API. 마크다운은 앱이 렌더 |
+| 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` | 폴더 목록·본문은 REST Contents. 검색 인덱스는 Git Trees `recursive=1`(경로 `docs/` 필터). 마크다운은 앱이 렌더 |
 | 첨부 파일 | 첨부 | Releases Assets | REST. 파일당 100MB 이상 2GB 이하. 본문에는 asset URL만 삽입 |
 | 정기 과업 | 자동 업무 | Actions | `workflow_dispatch` 또는 cron. private repository 포함 분(分) 안에서만 |
 | 스레드 톡 | 스레드 톡 | Issue comments (제목 `스레드 톡` 또는 `#1`), Reactions | 앱이 Issue를 확보한 뒤 댓글을 말풍선으로 표시 |
@@ -74,6 +74,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 
 - REST GET은 저장된 `etag`를 `If-None-Match`로 보낸다. `304`는 일차 한도를 소모하지 않으므로 캐시를 유지한다.
 - GraphQL(Discussions, Projects v2)은 ETag가 없다. `graphql_cursor.updated_at`이 신선하면 네트워크를 치지 않는다.
+- 자료실 Trees 검색 인덱스는 `graphql_cursor`(`docsTree:owner/repo`)에 tree SHA·TTL(60s)을 둔다. TTL이 신선하면 네트워크 생략. 만료 시 얕은 tree로 SHA만 비교해 같으면 캐시를 쓰고, 다르거나 강제 새로고침·쓰기 후면 `recursive=1`을 다시 받는다.
 - 한도는 사용자 토큰 기준 REST 시간당 5,000회, GraphQL 시간당 5,000포인트로 서로 따로 센다.
 - GitHub Free for organizations: private repository Actions 월 2,000분, Actions/Packages 저장 500MB. 초과 과금이 나지 않도록 지출 한도를 $0으로 둔다.
 - Cloudflare Workers 무료: 일 100,000 요청, 호출당 CPU 10ms. KV 쓰기는 일 1,000회. 푸시 브리지는 이 안에 둔다.

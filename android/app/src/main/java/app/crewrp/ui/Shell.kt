@@ -87,10 +87,10 @@ import app.crewrp.core.crewOwnerName
 import app.crewrp.core.DocEntry
 import app.crewrp.core.docBlocks
 import app.crewrp.core.dueOnInput
-import app.crewrp.core.filterDocs
 import app.crewrp.core.formatDue
 import app.crewrp.core.homeSections
 import app.crewrp.core.kanbanUsesStackedLanes
+import app.crewrp.core.listedDocs
 import app.crewrp.core.parentDocsPath
 import app.crewrp.core.roleLabel
 import app.crewrp.core.taskLane
@@ -602,7 +602,7 @@ private fun DocsTab(
 ) {
     var search by remember { mutableStateOf("") }
     var pendingPath by remember { mutableStateOf<String?>(null) }
-    val listed = filterDocs(content.docs, search)
+    val listed = listedDocs(content.docs, content.docsTree, search)
     val parent = parentDocsPath(content.docsDirPath)
     LaunchedEffect(content.docPath, content.doc, pendingPath) {
         val want = pendingPath ?: return@LaunchedEffect
