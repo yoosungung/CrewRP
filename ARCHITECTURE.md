@@ -39,16 +39,16 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | 내 크루 | 크루 전환 | memberships | 소유 0–1 + 가입 N. 하나를 골라 활성 세션으로 둔다 |
 | 크루 시작 | 크루 등록 | Repositories (admin) | admin private repo 중 하나 등록. 이미 owner면 불가 |
 | 초대 | 초대 | Organization invitation | 이메일만 |
-| 홈 | 홈 | Contents `README.md` + Projects | 크루 소개는 repo 루트 README 렌더. 오늘·다가오는 할 일 요약(탭하면 할 일 화면에서 해당 항목 열림). 고정 공지 목록은 두지 않는다 |
+| 홈 | 홈 | Contents `README.md` + Projects | 크루 소개는 repo 루트 README 렌더. **내 담당** 할 일(Issue assignees·미완료) + 오늘·다가오는 요약(탭하면 할 일 화면에서 해당 항목 열림). 고정 공지 목록은 두지 않는다 |
 | 투표 참여 | 투표 | Discussion poll | 기존 poll 조회와 `addDiscussionPollVote`. 앱에서 poll 생성은 하지 않는다 |
-| 할 일 | 할 일 / 댓글 | Projects (v2), Issues | GraphQL로 칸반·납기. **할 일별 댓글**은 연결된 Issue의 REST comments(목록·작성·수정·삭제). 소통 탭이 아님 |
+| 할 일 | 할 일 / 댓글 / 담당 | Projects (v2), Issues | GraphQL로 칸반·납기. **담당자**는 Issue assignees(REST로 설정). **할 일별 댓글**은 연결된 Issue의 REST comments(목록·작성·수정·삭제). 소통 탭이 아님 |
 | 행정 서식 | 서식 | Issue Forms YAML, Issues | 앱이 `.github/ISSUE_TEMPLATE` YAML을 읽어 네이티브 폼을 그린 뒤 Issue를 생성 |
 | 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` + Releases Assets | **문서**는 `docs/**/*.md`(필요 시 `.txt`) — Contents 목록·본문, Trees 검색, 인앱 마크다운 렌더/편집. **첨부**(이미지·PDF·기타)는 `crewrp-attachments` Release Assets — 업로드·목록·다운로드. 탭 시 미리보기 가능하면 View(QuickLook/Intent), 아니면 Share/Download. 본문에 넣을 때도 asset URL만. 범용 바이너리를 Contents에 올리지 않는다 |
 | 정기 과업 | 자동 업무 | Actions | `workflow_dispatch` 또는 cron. private repository 포함 분(分) 안에서만 |
 | 소통 | 소통 / 바로 대화 / 게시판 | Discord + Discussions | **상단** 바로 대화: `.crewrp/settings.json` 서버·채널 딥링크(미연동이면 OAuth). **하단** 게시판: Discussions 카테고리 → 글 목록·본문·작성. 탭 진입 시 Discord를 자동으로 열지 않는다. Issue 댓글 UI 아님 |
 | 알림 | 알림 | Webhook | Phase 3. Webhook → Cloudflare Worker → FCM |
 
-할 일 화면은 칸반과 마감일 리스트를 같은 Project 데이터로 전환한다. 홈은 README·오늘 할 일·다가오는 할 일이며 별도 저장소가 아니다. 할 일·자료실·소통(게시판)의 목록·작성·수정·삭제는 앱 네이티브 UI에서 하며, 원본은 GitHub에만 둔다. Discord **OAuth 앱**은 CrewRP 공용이고, **서버·채널 ID는 크루 repo**의 `.crewrp/settings.json`에 둔다(앱 바이너리에 하드코딩하지 않음).
+할 일 화면은 칸반과 마감일 리스트를 같은 Project 데이터로 전환한다. 홈은 README·내 담당·오늘·다가오는 할 일이며 별도 저장소가 아니다. 담당자는 GitHub Issue assignees이며 Projects 커스텀 필드가 아니다. 할 일·자료실·소통(게시판)의 목록·작성·수정·삭제는 앱 네이티브 UI에서 하며, 원본은 GitHub에만 둔다. Discord **OAuth 앱**은 CrewRP 공용이고, **서버·채널 ID는 크루 repo**의 `.crewrp/settings.json`에 둔다(앱 바이너리에 하드코딩하지 않음).
 
 ```json
 { "discord": { "serverId": "…", "channelId": "…" } }

@@ -488,12 +488,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createTask(title: String, body: String, status: String, dueOn: String?) async {
+    func createTask(title: String, body: String, status: String, dueOn: String?, assignee: String?) async {
         await withToken { token, owner, repo in
             let projects = ProjectsClient(transport: transport)
             let number = try await projects.resolveProjectNumber(
                 owner: session?.org ?? owner, preferred: projectNumber, token: token
             )
+            let assignees = normalizeAssigneeLogin(assignee).map { [$0] } ?? []
             _ = try await projects.createTask(
                 owner: owner,
                 repo: repo,
@@ -502,12 +503,13 @@ final class AppModel: ObservableObject {
                 projectNumber: number,
                 token: token,
                 dueOn: dueOn,
-                statusLabel: status
+                statusLabel: status,
+                assignees: assignees
             )
         }
     }
 
-    func updateTask(_ card: TaskCard, title: String, body: String, status: String, dueOn: String?) async {
+    func updateTask(_ card: TaskCard, title: String, body: String, status: String, dueOn: String?, assignee: String?) async {
         guard let meta = projectMeta else { return }
         let due = dueOn.flatMap { value in
             let trimmed = dueOnInput(value)
@@ -518,6 +520,10 @@ final class AppModel: ObservableObject {
             if let issueNumber = card.issueNumber {
                 try await projects.updateIssue(
                     owner: owner, repo: repo, issueNumber: issueNumber, title: title, body: body, token: token
+                )
+                let assignees = normalizeAssigneeLogin(assignee).map { [$0] } ?? []
+                try await projects.setIssueAssignees(
+                    owner: owner, repo: repo, issueNumber: issueNumber, assignees: assignees, token: token
                 )
             }
             let number = try await projects.resolveProjectNumber(
@@ -841,6 +847,13 @@ private struct HomeTab: View {
                                 .padding(.vertical, 4)
                             }
                         }
+                        if !sections.assigned.isEmpty {
+                            Section("내 담당") {
+                                ForEach(sections.assigned, id: \.id) { task in
+                                    Button { model.openTaskFromHome(task) } label: { TaskRow(task: task) }
+                                }
+                            }
+                        }
                         if !sections.today.isEmpty {
                             Section("오늘 할 일") {
                                 ForEach(sections.today, id: \.id) { task in
@@ -870,11 +883,11 @@ private struct HomeTab: View {
     }
 
     private var sections: HomeSections {
-        homeSections(tasks: model.tasks, today: todayISO())
+        homeSections(tasks: model.tasks, today: todayISO(), login: model.currentLogin)
     }
 
     private var homeQuiet: Bool {
-        sections.today.isEmpty && sections.upcoming.isEmpty && model.readme.isEmpty
+        sections.assigned.isEmpty && sections.today.isEmpty && sections.upcoming.isEmpty && model.readme.isEmpty
     }
 }
 
@@ -925,8 +938,8 @@ private struct TasksTab: View {
             }
             .refreshable { await model.refreshHomeData(forceNetwork: true) }
             .sheet(isPresented: $composing) {
-                TaskFormSheet { taskTitle, body, status, due in
-                    Task { await model.createTask(title: taskTitle, body: body, status: status, dueOn: due) }
+                TaskFormSheet(model: model) { taskTitle, body, status, due, assignee in
+                    Task { await model.createTask(title: taskTitle, body: body, status: status, dueOn: due, assignee: assignee) }
                 }
             }
             .sheet(item: $editing) { task in
@@ -934,8 +947,8 @@ private struct TasksTab: View {
                     task: task,
                     model: model,
                     showDelete: model.session?.teamRole == .admin,
-                    onSave: { taskTitle, body, status, due in
-                        Task { await model.updateTask(task, title: taskTitle, body: body, status: status, dueOn: due) }
+                    onSave: { taskTitle, body, status, due, assignee in
+                        Task { await model.updateTask(task, title: taskTitle, body: body, status: status, dueOn: due, assignee: assignee) }
                     },
                     onDelete: { Task { await model.deleteTask(task) } }
                 )
@@ -1016,12 +1029,13 @@ private struct TaskFormSheet: View {
     var task: TaskCard?
     var model: AppModel?
     var showDelete = false
-    var onSave: (String, String, String, String?) -> Void
+    var onSave: (String, String, String, String?, String?) -> Void
     var onDelete: (() -> Void)?
 
     @State private var fieldTitle: String
     @State private var fieldBody: String
     @State private var status: String
+    @State private var assignee: String
     @State private var dueOn: String
     @State private var draftComment = ""
     @State private var editingComment: ThreadMessage?
@@ -1036,7 +1050,7 @@ private struct TaskFormSheet: View {
         task: TaskCard? = nil,
         model: AppModel? = nil,
         showDelete: Bool = false,
-        onSave: @escaping (String, String, String, String?) -> Void,
+        onSave: @escaping (String, String, String, String?, String?) -> Void,
         onDelete: (() -> Void)? = nil
     ) {
         self.task = task
@@ -1047,6 +1061,7 @@ private struct TaskFormSheet: View {
         _fieldTitle = State(initialValue: task?.title ?? "")
         _fieldBody = State(initialValue: task?.body ?? "")
         _status = State(initialValue: task.map { taskStatusChoice(status: $0.status) } ?? TaskLane.inbox.title)
+        _assignee = State(initialValue: task?.assignees.first ?? "")
         _dueOn = State(initialValue: dueOnInput(task?.dueOn))
     }
 
@@ -1061,6 +1076,15 @@ private struct TaskFormSheet: View {
                     }
                 }
                 .pickerStyle(.menu)
+                HStack {
+                    TextField("담당자", text: $assignee)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if let me = model?.currentLogin, !me.isEmpty {
+                        Button("나에게") { assignee = me }
+                            .font(.caption)
+                    }
+                }
                 DueOnField(dueOn: $dueOn)
                 if let issueNumber = task?.issueNumber, let model {
                     Section("댓글") {
@@ -1110,7 +1134,7 @@ private struct TaskFormSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("저장") {
                         let due = dueOnInput(dueOn)
-                        onSave(fieldTitle, fieldBody, status, due.isEmpty ? nil : due)
+                        onSave(fieldTitle, fieldBody, status, due.isEmpty ? nil : due, normalizeAssigneeLogin(assignee))
                         dismiss()
                     }
                     .disabled(fieldTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1681,6 +1705,11 @@ private struct TaskRow: View {
                 Text(formatDue(task.dueOn))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let assignee = taskAssigneeLabel(task.assignees) {
+                    Text(assignee)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

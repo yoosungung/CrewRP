@@ -243,6 +243,7 @@ data class TaskCard(
     val issueNumber: Int? = null,
     val contentId: String? = null,
     val body: String = "",
+    val assignees: List<String> = emptyList(),
 )
 
 class ProjectsClient(
@@ -449,10 +450,15 @@ class ProjectsClient(
         token: String,
         dueOn: String? = null,
         statusLabel: String = "접수",
+        assignees: List<String> = emptyList(),
     ): TaskCard {
+        val cleanedAssignees = assignees.mapNotNull { normalizeAssigneeLogin(it) }
         val issueBody = buildJsonObject {
             put("title", title)
             put("body", body)
+            if (cleanedAssignees.isNotEmpty()) {
+                putJsonArray("assignees") { cleanedAssignees.forEach { add(it) } }
+            }
         }.toString()
         val created = transport.rest("POST", "$apiBase/repos/$owner/$repo/issues", token, issueBody)
         require(created.status in 200..299) { "github http ${created.status}" }
@@ -507,13 +513,29 @@ class ProjectsClient(
             dueOn = dueOn,
             token = token,
         )
-        return TaskCard(itemId, title, statusLabel, dueOn, number, nodeId, body)
+        return TaskCard(itemId, title, statusLabel, dueOn, number, nodeId, body, cleanedAssignees)
     }
 
     fun updateIssue(owner: String, repo: String, issueNumber: Int, title: String, body: String, token: String) {
         val payload = buildJsonObject {
             put("title", title)
             put("body", body)
+        }.toString()
+        val result = transport.rest("PATCH", "$apiBase/repos/$owner/$repo/issues/$issueNumber", token, payload)
+        require(result.status in 200..299) { "github http ${result.status}" }
+    }
+
+    /** Replaces Issue assignees (empty clears). Not a Projects field. */
+    fun setIssueAssignees(
+        owner: String,
+        repo: String,
+        issueNumber: Int,
+        assignees: List<String>,
+        token: String,
+    ) {
+        val cleaned = assignees.mapNotNull { normalizeAssigneeLogin(it) }
+        val payload = buildJsonObject {
+            putJsonArray("assignees") { cleaned.forEach { add(it) } }
         }.toString()
         val result = transport.rest("PATCH", "$apiBase/repos/$owner/$repo/issues/$issueNumber", token, payload)
         require(result.status in 200..299) { "github http ${result.status}" }
@@ -607,7 +629,7 @@ class ProjectsClient(
                     nodes{
                       id
                       content{
-                        ... on Issue { title body number id }
+                        ... on Issue { title body number id assignees(first:10){ nodes { login } } }
                       }
                       fieldValues(first:20){
                         nodes{
@@ -650,6 +672,10 @@ class ProjectsClient(
                 (it as? JsonPrimitive)?.content?.toIntOrNull()
             }
             val contentId = content?.get("id").textOrNull()
+            val assignees = content?.get("assignees")?.takeUnless { it is JsonNull }?.jsonObject
+                ?.get("nodes")?.jsonArray
+                ?.mapNotNull { (it as? JsonObject)?.get("login").textOrNull() }
+                .orEmpty()
             var status = "접수"
             var due: String? = null
             element["fieldValues"]?.jsonObject?.get("nodes")?.jsonArray?.forEach { fieldEl ->
@@ -661,7 +687,7 @@ class ProjectsClient(
                     due == null -> fieldEl["date"].textOrNull()?.let { due = it }
                 }
             }
-            TaskCard(id, title, status, due, issueNumber, contentId, body)
+            TaskCard(id, title, status, due, issueNumber, contentId, body, assignees)
         }
     }
 }

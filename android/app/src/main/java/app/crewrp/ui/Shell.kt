@@ -118,6 +118,8 @@ import app.crewrp.core.formatDue
 import app.crewrp.core.formatDueOnDate
 import app.crewrp.core.SHELL_TASKS_TAB_INDEX
 import app.crewrp.core.homeSections
+import app.crewrp.core.normalizeAssigneeLogin
+import app.crewrp.core.taskAssigneeLabel
 import app.crewrp.core.kanbanUsesStackedLanes
 import app.crewrp.core.listedLibrary
 import app.crewrp.core.parentDocsPath
@@ -162,8 +164,8 @@ data class CrewActions(
     val onDeleteBoardPost: (Notice) -> Unit,
     val onOpenBoardCategory: (DiscussionCategory) -> Unit,
     val onClearBoardCategory: () -> Unit,
-    val onCreateTask: (title: String, body: String, status: String, dueOn: String?) -> Unit,
-    val onUpdateTask: (TaskCard, title: String, body: String, status: String, dueOn: String?) -> Unit,
+    val onCreateTask: (title: String, body: String, status: String, dueOn: String?, assignee: String?) -> Unit,
+    val onUpdateTask: (TaskCard, title: String, body: String, status: String, dueOn: String?, assignee: String?) -> Unit,
     val onDeleteTask: (TaskCard) -> Unit,
     val onSaveDoc: (path: String, content: String) -> Unit,
     val onDeleteDoc: () -> Unit,
@@ -441,8 +443,8 @@ fun CrewShell(
             actions = actions,
             role = session.teamRole,
             onDismiss = { compose = null },
-            onSubmit = { t, body, status, due ->
-                actions.onCreateTask(t, body, status, due)
+            onSubmit = { t, body, status, due, assignee ->
+                actions.onCreateTask(t, body, status, due, assignee)
                 compose = null
             },
         )
@@ -496,8 +498,8 @@ fun CrewShell(
             task = task,
             showDelete = session.teamRole == TeamRole.ADMIN,
             onDismiss = { editingTask = null },
-            onSubmit = { t, body, status, due ->
-                actions.onUpdateTask(task, t, body, status, due)
+            onSubmit = { t, body, status, due, assignee ->
+                actions.onUpdateTask(task, t, body, status, due, assignee)
                 editingTask = null
             },
             onDelete = { actions.onDeleteTask(task); editingTask = null },
@@ -514,7 +516,7 @@ private fun TaskFormDialog(
     actions: CrewActions,
     role: TeamRole,
     onDismiss: () -> Unit,
-    onSubmit: (title: String, body: String, status: String, dueOn: String?) -> Unit,
+    onSubmit: (title: String, body: String, status: String, dueOn: String?, assignee: String?) -> Unit,
     task: TaskCard? = null,
     showDelete: Boolean = false,
     onDelete: (() -> Unit)? = null,
@@ -522,6 +524,7 @@ private fun TaskFormDialog(
     var fieldTitle by remember { mutableStateOf(task?.title.orEmpty()) }
     var fieldBody by remember { mutableStateOf(task?.body.orEmpty()) }
     var status by remember { mutableStateOf(task?.let { taskStatusChoice(it.status) } ?: TaskLane.INBOX.title) }
+    var assignee by remember { mutableStateOf(task?.assignees?.firstOrNull().orEmpty()) }
     var due by remember { mutableStateOf(dueOnInput(task?.dueOn)) }
     var statusExpanded by remember { mutableStateOf(false) }
     var draftComment by remember { mutableStateOf("") }
@@ -575,6 +578,23 @@ private fun TaskFormDialog(
                                 },
                             )
                         }
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        assignee,
+                        { assignee = it },
+                        label = { Text("담당자") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                    )
+                    val me = content.currentLogin
+                    if (!me.isNullOrBlank()) {
+                        TextButton(onClick = { assignee = me }) { Text("나에게") }
                     }
                 }
                 DueOnField(
@@ -637,7 +657,7 @@ private fun TaskFormDialog(
             TextButton(
                 onClick = {
                     val trimmed = dueOnInput(due)
-                    onSubmit(fieldTitle, fieldBody, status, trimmed.ifBlank { null })
+                    onSubmit(fieldTitle, fieldBody, status, trimmed.ifBlank { null }, normalizeAssigneeLogin(assignee))
                 },
                 enabled = fieldTitle.isNotBlank(),
             ) { Text("저장") }
@@ -765,8 +785,8 @@ private fun HomeTab(
     onOpenTask: (TaskCard) -> Unit,
 ) {
     val today = LocalDate.now().toString()
-    val sections = homeSections(content.tasks, today)
-    val quiet = sections.today.isEmpty() && sections.upcoming.isEmpty() && content.readme.isEmpty()
+    val sections = homeSections(content.tasks, today, content.currentLogin)
+    val quiet = sections.assigned.isEmpty() && sections.today.isEmpty() && sections.upcoming.isEmpty() && content.readme.isEmpty()
     when {
         content.loading && content.tasks.isEmpty() && content.readme.isEmpty() -> LoadingPane(modifier)
         quiet && (content.tasksFailed || content.readmeFailed) -> FailedPane(modifier)
@@ -792,6 +812,12 @@ private fun HomeTab(
                             }
                         }
                     }
+                }
+            }
+            if (sections.assigned.isNotEmpty()) {
+                item { Text("내 담당", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
+                items(sections.assigned, key = { "as-${it.id}" }) { task ->
+                    Box(Modifier.clickable { onOpenTask(task) }) { TaskRow(task) }
                 }
             }
             if (sections.today.isNotEmpty()) {
@@ -1193,6 +1219,9 @@ private fun TaskRow(task: TaskCard) {
                     Text(lane.title, Modifier.padding(horizontal = 8.dp, vertical = 2.dp), style = MaterialTheme.typography.labelMedium)
                 }
                 Text(formatDue(task.dueOn), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                taskAssigneeLabel(task.assignees)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }

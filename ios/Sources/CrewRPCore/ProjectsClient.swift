@@ -8,6 +8,7 @@ public struct TaskCard: Sendable, Equatable, Identifiable, Codable {
     public let issueNumber: Int?
     public let contentId: String?
     public let body: String
+    public let assignees: [String]
 
     public init(
         id: String,
@@ -16,7 +17,8 @@ public struct TaskCard: Sendable, Equatable, Identifiable, Codable {
         dueOn: String?,
         issueNumber: Int? = nil,
         contentId: String? = nil,
-        body: String = ""
+        body: String = "",
+        assignees: [String] = []
     ) {
         self.id = id
         self.title = title
@@ -25,6 +27,19 @@ public struct TaskCard: Sendable, Equatable, Identifiable, Codable {
         self.issueNumber = issueNumber
         self.contentId = contentId
         self.body = body
+        self.assignees = assignees
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        status = try c.decode(String.self, forKey: .status)
+        dueOn = try c.decodeIfPresent(String.self, forKey: .dueOn)
+        issueNumber = try c.decodeIfPresent(Int.self, forKey: .issueNumber)
+        contentId = try c.decodeIfPresent(String.self, forKey: .contentId)
+        body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
+        assignees = try c.decodeIfPresent([String].self, forKey: .assignees) ?? []
     }
 }
 
@@ -222,14 +237,18 @@ public struct ProjectsClient: Sendable {
         projectNumber: Int,
         token: String,
         dueOn: String? = nil,
-        statusLabel: String = "접수"
+        statusLabel: String = "접수",
+        assignees: [String] = []
     ) async throws -> TaskCard {
         var request = URLRequest(url: apiBase.appending(path: "repos/\(owner)/\(repo)/issues"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["title": title, "body": body])
+        var payload: [String: Any] = ["title": title, "body": body]
+        let cleanedAssignees = assignees.compactMap { normalizeAssigneeLogin($0) }
+        if !cleanedAssignees.isEmpty { payload["assignees"] = cleanedAssignees }
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (data, response) = try await transport.data(for: request)
         guard (200..<300).contains(response.statusCode) else {
             throw GitHubAPIError.httpStatus(response.statusCode)
@@ -290,7 +309,8 @@ public struct ProjectsClient: Sendable {
             dueOn: dueOn,
             issueNumber: issue.number,
             contentId: issue.node_id,
-            body: body
+            body: body,
+            assignees: cleanedAssignees
         )
     }
 
@@ -308,6 +328,27 @@ public struct ProjectsClient: Sendable {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["title": title, "body": body])
+        let (_, response) = try await transport.data(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            throw GitHubAPIError.httpStatus(response.statusCode)
+        }
+    }
+
+    /// Replaces Issue assignees (empty clears). Not a Projects field.
+    public func setIssueAssignees(
+        owner: String,
+        repo: String,
+        issueNumber: Int,
+        assignees: [String],
+        token: String
+    ) async throws {
+        let cleaned = assignees.compactMap { normalizeAssigneeLogin($0) }
+        var request = URLRequest(url: apiBase.appending(path: "repos/\(owner)/\(repo)/issues/\(issueNumber)"))
+        request.httpMethod = "PATCH"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["assignees": cleaned])
         let (_, response) = try await transport.data(for: request)
         guard (200..<300).contains(response.statusCode) else {
             throw GitHubAPIError.httpStatus(response.statusCode)
@@ -399,7 +440,7 @@ public struct ProjectsClient: Sendable {
               items(first:50){
                 nodes{
                   id
-                  content{ ... on Issue { title body number id } }
+                  content{ ... on Issue { title body number id assignees(first:10){ nodes { login } } } }
                   fieldValues(first:20){
                     nodes{
                       ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
@@ -428,6 +469,8 @@ public struct ProjectsClient: Sendable {
             let body = content?["body"] as? String ?? ""
             let issueNumber = content?["number"] as? Int
             let contentId = content?["id"] as? String
+            let assigneeNodes = ((content?["assignees"] as? [String: Any])?["nodes"] as? [[String: Any]]) ?? []
+            let assignees = assigneeNodes.compactMap { $0["login"] as? String }
             var status = "접수"
             var due: String?
             let fields = ((node["fieldValues"] as? [String: Any])?["nodes"] as? [[String: Any]]) ?? []
@@ -445,7 +488,8 @@ public struct ProjectsClient: Sendable {
                 dueOn: due,
                 issueNumber: issueNumber,
                 contentId: contentId,
-                body: body
+                body: body,
+                assignees: assignees
             )
         }
     }

@@ -572,17 +572,21 @@ class ShellPresentationTest {
     @Test
     fun homeKeepsTodayAndUpcomingTasks() {
         val tasks = listOf(
-            TaskCard("a", "오늘", "접수", "2026-09-27T09:00:00"),
-            TaskCard("b", "다음", "In Progress", "2026-10-01"),
-            TaskCard("c", "끝", "Done", "2026-10-02"),
+            TaskCard("a", "오늘", "접수", "2026-09-27T09:00:00", assignees = listOf("alice")),
+            TaskCard("b", "다음", "In Progress", "2026-10-01", assignees = listOf("bob")),
+            TaskCard("c", "끝", "Done", "2026-10-02", assignees = listOf("alice")),
             TaskCard("d", "지난", "접수", "2026-09-01"),
+            TaskCard("e", "내일", "접수", "2026-09-28", assignees = listOf("Alice")),
         )
-        val home = homeSections(tasks, "2026-09-27")
+        val home = homeSections(tasks, "2026-09-27", login = "alice")
+        assertEquals(listOf("a", "e"), home.assigned.map { it.id })
         assertEquals(listOf("a"), home.today.map { it.id })
-        assertEquals(listOf("b"), home.upcoming.map { it.id })
+        assertEquals(listOf("e", "b"), home.upcoming.map { it.id })
         assertEquals(1, SHELL_TASKS_TAB_INDEX)
         assertEquals("다음", taskMatching("b", tasks)?.title)
         assertEquals(null, taskMatching("missing", tasks))
+        assertEquals("bob", normalizeAssigneeLogin(" @bob "))
+        assertEquals("@bob", taskAssigneeLabel(listOf("bob")))
     }
 
     @Test

@@ -84,11 +84,23 @@ fun formatDue(iso: String?): String {
 }
 
 data class HomeSections(
+    val assigned: List<TaskCard>,
     val today: List<TaskCard>,
     val upcoming: List<TaskCard>,
 )
 
-fun homeSections(tasks: List<TaskCard>, today: String): HomeSections {
+fun homeSections(tasks: List<TaskCard>, today: String, login: String? = null): HomeSections {
+    val loginKey = login?.trim().orEmpty()
+    val assigned = if (loginKey.isEmpty()) {
+        emptyList()
+    } else {
+        tasks
+            .filter { card ->
+                taskLane(card.status) != TaskLane.DONE &&
+                    card.assignees.any { it.equals(loginKey, ignoreCase = true) }
+            }
+            .sortedBy { it.dueOn ?: "9999" }
+    }
     val todayTasks = tasks.filter { it.dueOn?.startsWith(today) == true }
     val upcoming = tasks
         .filter { card ->
@@ -97,7 +109,19 @@ fun homeSections(tasks: List<TaskCard>, today: String): HomeSections {
         }
         .sortedBy { it.dueOn }
         .take(3)
-    return HomeSections(todayTasks, upcoming)
+    return HomeSections(assigned, todayTasks, upcoming)
+}
+
+fun normalizeAssigneeLogin(raw: String?): String? {
+    var s = raw?.trim().orEmpty()
+    if (s.startsWith("@")) s = s.drop(1).trim()
+    return s.takeIf { it.isNotEmpty() }
+}
+
+fun taskAssigneeLabel(assignees: List<String>): String? {
+    val names = assignees.map { it.trim() }.filter { it.isNotEmpty() }
+    if (names.isEmpty()) return null
+    return names.joinToString(", ") { "@$it" }
 }
 
 /** NavigationBar에서 할 일 탭 인덱스. */

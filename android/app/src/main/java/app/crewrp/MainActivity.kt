@@ -329,12 +329,12 @@ class MainActivity : ComponentActivity() {
                                 onClearBoardCategory = {
                                     content = content.copy(selectedCategory = null, boardPosts = emptyList())
                                 },
-                                onCreateTask = { title, body, status, due ->
-                                    runWrite { it.createTask(title, body, status, due) }
+                                onCreateTask = { title, body, status, due, assignee ->
+                                    runWrite { it.createTask(title, body, status, due, assignee) }
                                 },
-                                onUpdateTask = { card, title, body, status, due ->
+                                onUpdateTask = { card, title, body, status, due, assignee ->
                                     val meta = content.projectMeta ?: return@CrewActions
-                                    runWrite { it.updateTask(meta, card, title, body, status, due) }
+                                    runWrite { it.updateTask(meta, card, title, body, status, due, assignee) }
                                 },
                                 onDeleteTask = { card ->
                                     val meta = content.projectMeta ?: return@CrewActions

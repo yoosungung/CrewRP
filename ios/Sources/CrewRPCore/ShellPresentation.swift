@@ -149,11 +149,24 @@ public func formatDue(_ iso: String?) -> String {
 }
 
 public struct HomeSections: Equatable, Sendable {
+    public let assigned: [TaskCard]
     public let today: [TaskCard]
     public let upcoming: [TaskCard]
 }
 
-public func homeSections(tasks: [TaskCard], today: String) -> HomeSections {
+public func homeSections(tasks: [TaskCard], today: String, login: String? = nil) -> HomeSections {
+    let loginKey = login?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let assigned: [TaskCard]
+    if loginKey.isEmpty {
+        assigned = []
+    } else {
+        assigned = tasks
+            .filter { card in
+                taskLane(status: card.status) != .done
+                    && card.assignees.contains { $0.caseInsensitiveCompare(loginKey) == .orderedSame }
+            }
+            .sorted { ($0.dueOn ?? "9999") < ($1.dueOn ?? "9999") }
+    }
     let todayTasks = tasks.filter { $0.dueOn?.hasPrefix(today) == true }
     let upcoming = tasks
         .filter { card in
@@ -162,7 +175,20 @@ public func homeSections(tasks: [TaskCard], today: String) -> HomeSections {
         }
         .sorted { ($0.dueOn ?? "9999") < ($1.dueOn ?? "9999") }
         .prefix(3)
-    return HomeSections(today: todayTasks, upcoming: Array(upcoming))
+    return HomeSections(assigned: assigned, today: todayTasks, upcoming: Array(upcoming))
+}
+
+public func normalizeAssigneeLogin(_ raw: String?) -> String? {
+    guard var s = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+    if s.hasPrefix("@") { s.removeFirst() }
+    s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    return s.isEmpty ? nil : s
+}
+
+public func taskAssigneeLabel(_ assignees: [String]) -> String? {
+    let names = assignees.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    guard !names.isEmpty else { return nil }
+    return names.map { "@\($0)" }.joined(separator: ", ")
 }
 
 /// TabView / NavigationBar에서 할 일 탭 인덱스.

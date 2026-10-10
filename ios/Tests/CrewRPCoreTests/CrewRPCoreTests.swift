@@ -698,20 +698,24 @@ struct ShellPresentationTests {
         #expect(parseDueOnDate("nope") == nil)
     }
 
-    @Test("home keeps today and upcoming tasks")
+    @Test("home keeps assigned, today, and upcoming tasks")
     func home() {
         let tasks = [
-            TaskCard(id: "a", title: "오늘", status: "접수", dueOn: "2026-09-27T09:00:00"),
-            TaskCard(id: "b", title: "다음", status: "In Progress", dueOn: "2026-10-01"),
-            TaskCard(id: "c", title: "끝", status: "Done", dueOn: "2026-10-02"),
+            TaskCard(id: "a", title: "오늘", status: "접수", dueOn: "2026-09-27T09:00:00", assignees: ["alice"]),
+            TaskCard(id: "b", title: "다음", status: "In Progress", dueOn: "2026-10-01", assignees: ["bob"]),
+            TaskCard(id: "c", title: "끝", status: "Done", dueOn: "2026-10-02", assignees: ["alice"]),
             TaskCard(id: "d", title: "지난", status: "접수", dueOn: "2026-09-01"),
+            TaskCard(id: "e", title: "내일", status: "접수", dueOn: "2026-09-28", assignees: ["Alice"]),
         ]
-        let home = homeSections(tasks: tasks, today: "2026-09-27")
+        let home = homeSections(tasks: tasks, today: "2026-09-27", login: "alice")
+        #expect(home.assigned.map(\.id) == ["a", "e"])
         #expect(home.today.map(\.id) == ["a"])
-        #expect(home.upcoming.map(\.id) == ["b"])
+        #expect(home.upcoming.map(\.id) == ["e", "b"])
         #expect(shellTasksTabIndex == 1)
         #expect(taskMatching(id: "b", in: tasks)?.title == "다음")
         #expect(taskMatching(id: "missing", in: tasks) == nil)
+        #expect(normalizeAssigneeLogin(" @bob ") == "bob")
+        #expect(taskAssigneeLabel(["bob"]) == "@bob")
     }
 
     @Test("doc blocks keep headings, bullets, and paragraphs")

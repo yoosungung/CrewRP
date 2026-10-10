@@ -19,6 +19,7 @@ import app.crewrp.core.TaskCard
 import app.crewrp.core.ThreadMessage
 import app.crewrp.core.ThreadTalkClient
 import app.crewrp.core.UrlHttpTransport
+import app.crewrp.core.normalizeAssigneeLogin
 import app.crewrp.core.taskLane
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
@@ -192,8 +193,26 @@ class CrewWriter(
     fun listBoardPosts(categoryId: String): List<Notice> =
         DiscussionsClient(transport).listDiscussions(owner, repo, categoryId, token, cache, forceNetwork = true)
 
-    fun createTask(title: String, body: String, statusLabel: String, dueOn: String?): TaskCard =
-        projects.createTask(owner, repo, title, body, resolvedProjectNumber(), token, dueOn, statusLabel)
+    fun createTask(
+        title: String,
+        body: String,
+        statusLabel: String,
+        dueOn: String?,
+        assignee: String?,
+    ): TaskCard {
+        val assignees = normalizeAssigneeLogin(assignee)?.let { listOf(it) }.orEmpty()
+        return projects.createTask(
+            owner,
+            repo,
+            title,
+            body,
+            resolvedProjectNumber(),
+            token,
+            dueOn,
+            statusLabel,
+            assignees,
+        )
+    }
 
     fun updateTask(
         meta: ProjectFieldMeta,
@@ -202,8 +221,13 @@ class CrewWriter(
         body: String,
         statusLabel: String,
         dueOn: String?,
+        assignee: String?,
     ) {
-        card.issueNumber?.let { projects.updateIssue(owner, repo, it, title, body, token) }
+        card.issueNumber?.let {
+            projects.updateIssue(owner, repo, it, title, body, token)
+            val assignees = normalizeAssigneeLogin(assignee)?.let { login -> listOf(login) }.orEmpty()
+            projects.setIssueAssignees(owner, repo, it, assignees, token)
+        }
         val ready = if (dueOn != null) {
             projects.ensureDueDateField(meta, session.org, resolvedProjectNumber(), token)
         } else {
