@@ -86,10 +86,9 @@ fun formatDue(iso: String?): String {
 data class HomeSections(
     val today: List<TaskCard>,
     val upcoming: List<TaskCard>,
-    val notices: List<Notice>,
 )
 
-fun homeSections(tasks: List<TaskCard>, notices: List<Notice>, today: String): HomeSections {
+fun homeSections(tasks: List<TaskCard>, today: String): HomeSections {
     val todayTasks = tasks.filter { it.dueOn?.startsWith(today) == true }
     val upcoming = tasks
         .filter { card ->
@@ -98,7 +97,7 @@ fun homeSections(tasks: List<TaskCard>, notices: List<Notice>, today: String): H
         }
         .sortedBy { it.dueOn }
         .take(3)
-    return HomeSections(todayTasks, upcoming, notices.take(3))
+    return HomeSections(todayTasks, upcoming)
 }
 
 sealed interface DocBlock {

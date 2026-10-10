@@ -15,6 +15,12 @@ object GraphQLFreshness {
     fun listNoticesQueryName(owner: String, repo: String): String =
         "listNotices:$owner/$repo"
 
+    fun listDiscussionsQueryName(owner: String, repo: String, categoryId: String): String =
+        "listDiscussions:$owner/$repo:$categoryId"
+
+    fun listCategoriesQueryName(owner: String, repo: String): String =
+        "listCategories:$owner/$repo"
+
     fun docsTreeQueryName(owner: String, repo: String): String =
         "docsTree:$owner/$repo"
 

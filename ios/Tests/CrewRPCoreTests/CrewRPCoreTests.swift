@@ -698,7 +698,7 @@ struct ShellPresentationTests {
         #expect(parseDueOnDate("nope") == nil)
     }
 
-    @Test("home keeps today, upcoming, and three notices")
+    @Test("home keeps today and upcoming tasks")
     func home() {
         let tasks = [
             TaskCard(id: "a", title: "오늘", status: "접수", dueOn: "2026-09-27T09:00:00"),
@@ -706,11 +706,9 @@ struct ShellPresentationTests {
             TaskCard(id: "c", title: "끝", status: "Done", dueOn: "2026-10-02"),
             TaskCard(id: "d", title: "지난", status: "접수", dueOn: "2026-09-01"),
         ]
-        let notices = (1...4).map { Notice(id: "n\($0)", title: "공지\($0)", body: "") }
-        let home = homeSections(tasks: tasks, notices: notices, today: "2026-09-27")
+        let home = homeSections(tasks: tasks, today: "2026-09-27")
         #expect(home.today.map(\.id) == ["a"])
         #expect(home.upcoming.map(\.id) == ["b"])
-        #expect(home.notices.map(\.id) == ["n1", "n2", "n3"])
     }
 
     @Test("doc blocks keep headings, bullets, and paragraphs")
@@ -809,6 +807,61 @@ struct PendingLoginStoreTests {
         #expect(loaded?.codeVerifier == "ver")
         try store.clear()
         #expect(try store.load() == nil)
+    }
+}
+
+@Suite("DiscussionsCategories")
+struct DiscussionsCategoriesTests {
+    @Test("listCategories parses repository categories")
+    func listCategories() async throws {
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            #expect(request.url!.path.hasSuffix("/graphql"))
+            let body = Data(#"""
+            {"data":{"repository":{"id":"R1","discussionCategories":{"nodes":[
+              {"id":"C1","name":"공지"},{"id":"C2","name":"자유"}
+            ]}}}}
+            """#.utf8)
+            return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let setup = try await DiscussionsClient(transport: transport)
+            .listCategories(owner: "crew", repo: "box", token: "t", forceNetwork: true)
+        #expect(setup.repositoryId == "R1")
+        #expect(setup.categories.map(\.name) == ["공지", "자유"])
+    }
+
+    @Test("listDiscussions filters by categoryId")
+    func listDiscussions() async throws {
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            let raw = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
+            #expect(raw.contains("categoryId"))
+            #expect(raw.contains("CAT1"))
+            let body = Data(#"""
+            {"data":{"repository":{"discussions":{"nodes":[
+              {"id":"D1","title":"hello","body":"b","author":{"login":"ada"}}
+            ]}}}}
+            """#.utf8)
+            return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let items = try await DiscussionsClient(transport: transport).listDiscussions(
+            owner: "crew", repo: "box", categoryId: "CAT1", token: "t", forceNetwork: true
+        )
+        #expect(items.map(\.id) == ["D1"])
+        #expect(items[0].title == "hello")
+    }
+
+    @Test("fetchReadme returns nil on 404")
+    func readmeMissing() async throws {
+        let cache = try CacheStore(path: ":memory:")
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            #expect(request.url!.path.hasSuffix("/contents/README.md"))
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!)
+        }
+        let text = try await DocsClient(transport: transport, cache: cache)
+            .fetchReadme(owner: "crew", repo: "box", token: "t")
+        #expect(text == nil)
     }
 }
 

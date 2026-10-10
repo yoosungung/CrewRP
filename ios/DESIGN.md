@@ -35,13 +35,13 @@ CREWRP_E2E_TOKEN=… CREWRP_E2E_REPO=owner/repo ../scripts/e2e-crud.sh
 
 - 포인트 색은 틸이고, 배경은 시스템 grouped 색을 따른다. 앱 아이콘은 `CrewRPApp/Assets.xcassets`의 틸 배경·세 명 실루엣이다.
 - 소통·자료실 검색에서 입력 중 칸 밖(목록)을 누르면 포커스를 해제하고 키보드를 닫아 탭이 다시 보인다.
-- 할 일은 칸반(접수·진행 중·완료)과 마감일 목록을 전환한다. compact(폰) 칸반은 레인별 세로 섹션(전체 너비)이고, 와이드는 다열·상단 정렬(마감일 목록과 같음)이다. 홈은 오늘 할 일, 고정 공지, 다가오는 할 일이다.
-- 할 일 작성·수정은 제목·내용·상태(메뉴)·납기(캘린더만) 순이다. 내용은 Issue body, 상태는 Projects Status, 납기는 DATE 필드에 저장한다. 보드에 날짜 필드가 없으면 `Due date`를 만든다.
+- 할 일은 칸반(접수·진행 중·완료)과 마감일 목록을 전환한다. compact(폰) 칸반은 레인별 세로 섹션(전체 너비)이고, 와이드는 다열·상단 정렬(마감일 목록과 같음)이다. 홈은 repo `README.md` 렌더, 오늘 할 일, 다가오는 할 일이다(고정 공지·홈 `+` 없음).
+- 할 일 작성·수정은 제목·내용·상태(메뉴)·납기(캘린더만) 순이다. 내용은 Issue body, 상태는 Projects Status, 납기는 DATE 필드에 저장한다. 보드에 날짜 필드가 없으면 `Due date`를 만든다. **수정 시트**에서 `issueNumber`가 있으면 댓글(Issue comments) 목록·작성·본인/운영진 수정·삭제를 보여 준다.
 - 불러오기 실패는 다시 시도를 보여 준다. Discord 식별자가 비어 있으면 바로 대화 버튼을 숨긴다.
-- 공지·할 일·자료실·소통은 앱에서 CRUD한다. 탭의 `+`로 작성, 항목으로 상세·수정·삭제. 운영진은 전 항목, 멤버는 본인 작성분만 수정·삭제.
+- 할 일·자료실·소통(게시판 글)은 앱에서 CRUD한다. 탭의 `+`로 작성(소통은 카테고리 안에서), 항목으로 상세·수정·삭제. 운영진은 전 항목, 멤버는 본인 작성분만 수정·삭제.
 - 자료실은 **문서(md)** + **첨부(Release Assets)** . 문서: 목록(파일·폴더) → 시트 상세(렌더·편집·삭제). `listDocs(path:)` 드릴다운·상위 복귀. 검색 시 `listDocsTree` + 첨부 이름 필터. `+`는 「문서 작성」|「파일 첨부」. 첨부는 `ReleaseAssetClient`로 `crewrp-attachments`에 업로드·목록. 탭 시 이미지/PDF는 QuickLook View, 그 외 Share/Download. compact에서 목록+본문 split을 쓰지 않는다.
 - OAuth scope는 `read:org repo project`. Projects v2 쓰기는 `project`가 필요하므로 스코프 변경 후에는 재로그인한다.
-- 소통 탭은 Discord다. 탭 선택 시 연동·**활성 크루** `.crewrp/settings.json`의 서버·채널이 있으면 딥링크를 바로 열고, 미연동이면 OAuth 연결을 시작한다. Issue 말풍선은 소통 본체가 아니다. 홈 새로고침에서 Issue 톡 API를 호출하지 않는다.
+- 소통 탭은 **허브**다. 상단 바로 대화(Discord 연동·딥링크·운영진 서버·채널 등록), 하단 Discussions 카테고리 → 글 목록·상세·작성. 탭 진입 시 Discord를 자동으로 열지 않는다. Issue 말풍선은 소통 본체가 아니다.
 - Discord 연동은 `account_link`에 user id·표시 이름만 두고, Discord 액세스 토큰은 보관하지 않는다. 앱 로그아웃 시 연동도 지운다.
 - `Info.plist`: `DiscordClientID`(OAuth 공용). 서버·채널 ID는 repo `.crewrp/settings.json`(운영진이 앱에서 등록 가능).
 - 홈·크루 시작 화면 상단에 **로그아웃**이 있다. 토큰·대기 OAuth·세션을 지우고 로그인 화면으로 돌아간다.

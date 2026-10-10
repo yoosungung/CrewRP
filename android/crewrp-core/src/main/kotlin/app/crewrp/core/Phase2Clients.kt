@@ -14,7 +14,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 data class CachedHTTPResponse(
@@ -180,6 +182,23 @@ class DocsClient(
         require(dto.encoding == "base64" && dto.content != null)
         val bytes = Base64.getMimeDecoder().decode(dto.content.replace("\n", ""))
         return DocFile(dto.path, bytes.toString(Charsets.UTF_8), dto.sha)
+    }
+
+    /** Repo root README for home. Missing file → null. */
+    fun fetchReadme(owner: String, repo: String, token: String): String? {
+        val url = "$apiBase/repos/$owner/$repo/contents/README.md"
+        val headers = mapOf(
+            "Authorization" to "Bearer $token",
+            "Accept" to "application/vnd.github+json",
+            "X-GitHub-Api-Version" to "2022-11-28",
+        )
+        val result = transport.exchange("GET", url, headers, null)
+        if (result.status == 404) return null
+        require(result.status in 200..299) { "github http ${result.status}" }
+        val dto = json.decodeFromString(ContentDTO.serializer(), result.body)
+        require(dto.encoding == "base64" && dto.content != null)
+        val bytes = Base64.getMimeDecoder().decode(dto.content.replace("\n", ""))
+        return bytes.toString(Charsets.UTF_8)
     }
 
     fun saveMarkdown(owner: String, repo: String, path: String, content: String, token: String, sha: String?): DocFile {
@@ -734,7 +753,25 @@ class DiscussionsClient(
         )
     }
 
-    fun resolveSetup(owner: String, repo: String, token: String): DiscussionSetup {
+    fun listCategories(
+        owner: String,
+        repo: String,
+        token: String,
+        cache: CacheStore? = null,
+        forceNetwork: Boolean = false,
+        now: Instant = Instant.now(),
+    ): DiscussionRepoSetup {
+        val queryName = GraphQLFreshness.listCategoriesQueryName(owner, repo)
+        if (!forceNetwork && cache != null) {
+            GraphQLFreshness.freshBody(cache, queryName, now)?.let { body ->
+                val obj = json.parseToJsonElement(body).jsonObject
+                val cats = obj["categories"]!!.jsonArray.map {
+                    val c = it.jsonObject
+                    DiscussionCategory(c["id"]!!.jsonPrimitive.content, c["name"]!!.jsonPrimitive.content)
+                }
+                return DiscussionRepoSetup(obj["repositoryId"]!!.jsonPrimitive.content, cats)
+            }
+        }
         val root = Graphql.post(
             transport,
             apiBase,
@@ -759,12 +796,89 @@ class DiscussionsClient(
             .mapNotNull { el ->
                 val o = el as? JsonObject ?: return@mapNotNull null
                 val id = o["id"].textOrNull() ?: return@mapNotNull null
-                id to o["name"].textOrNull().orEmpty()
+                DiscussionCategory(id, o["name"].textOrNull().orEmpty())
             }
-        val preferred = categories.firstOrNull { it.second.contains("공지") }
-            ?: categories.firstOrNull()
+        val setup = DiscussionRepoSetup(repoId, categories)
+        if (cache != null) {
+            val body = buildJsonObject {
+                put("repositoryId", setup.repositoryId)
+                putJsonArray("categories") {
+                    setup.categories.forEach { cat ->
+                        add(buildJsonObject {
+                            put("id", cat.id)
+                            put("name", cat.name)
+                        })
+                    }
+                }
+            }.toString()
+            GraphQLFreshness.store(cache, queryName, body, now)
+        }
+        return setup
+    }
+
+    fun listDiscussions(
+        owner: String,
+        repo: String,
+        categoryId: String,
+        token: String,
+        cache: CacheStore? = null,
+        forceNetwork: Boolean = false,
+        now: Instant = Instant.now(),
+    ): List<Notice> {
+        val queryName = GraphQLFreshness.listDiscussionsQueryName(owner, repo, categoryId)
+        if (!forceNetwork && cache != null) {
+            GraphQLFreshness.freshBody(cache, queryName, now)?.let { body ->
+                return json.decodeFromString(ListSerializer(Notice.serializer()), body)
+            }
+        }
+        val root = Graphql.post(
+            transport,
+            apiBase,
+            token,
+            """
+            query(${'$'}owner:String!,${'$'}name:String!,${'$'}categoryId:ID!){
+              repository(owner:${'$'}owner,name:${'$'}name){
+                discussions(first:20, categoryId:${'$'}categoryId){ nodes { id title body author { login } } }
+              }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                put("owner", owner)
+                put("name", repo)
+                put("categoryId", categoryId)
+            },
+        )
+        val repository = root["data"]?.jsonObject?.get("repository") ?: return emptyList()
+        if (repository is JsonNull) return emptyList()
+        val nodes = repository.jsonObject["discussions"]?.jsonObject?.get("nodes")?.jsonArray
+            ?: return emptyList()
+        val notices = nodes.mapNotNull { element ->
+            if (element !is JsonObject) return@mapNotNull null
+            val id = element["id"].textOrNull() ?: return@mapNotNull null
+            Notice(
+                id,
+                element["title"].textOrNull().orEmpty(),
+                element["body"].textOrNull().orEmpty(),
+                element["author"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull(),
+            )
+        }
+        if (cache != null) {
+            GraphQLFreshness.store(
+                cache,
+                queryName,
+                json.encodeToString(ListSerializer(Notice.serializer()), notices),
+                now,
+            )
+        }
+        return notices
+    }
+
+    fun resolveSetup(owner: String, repo: String, token: String): DiscussionSetup {
+        val setup = listCategories(owner, repo, token, forceNetwork = true)
+        val preferred = setup.categories.firstOrNull { it.name.contains("공지") }
+            ?: setup.categories.firstOrNull()
             ?: error("no discussion category")
-        return DiscussionSetup(repoId, preferred.first)
+        return DiscussionSetup(setup.repositoryId, preferred.id)
     }
 
     fun createNotice(repositoryId: String, categoryId: String, title: String, body: String, token: String): Notice {
@@ -986,7 +1100,7 @@ class ThreadTalkClient(
         if (result.body.isBlank()) return emptyList()
         return json.parseToJsonElement(result.body).jsonArray.mapNotNull { element ->
             if (element !is JsonObject) return@mapNotNull null
-            val id = element["id"].textOrNull() ?: return@mapNotNull null
+            val id = commentId(element["id"]) ?: return@mapNotNull null
             val author = element["user"]?.takeUnless { it is JsonNull }?.jsonObject?.get("login").textOrNull().orEmpty()
             ThreadMessage(id, element["body"].textOrNull().orEmpty(), author)
         }
@@ -1002,7 +1116,7 @@ class ThreadTalkClient(
         require(result.status in 200..299) { "github http ${result.status}" }
         val o = json.parseToJsonElement(result.body).jsonObject
         return ThreadMessage(
-            o["id"].textOrNull().orEmpty(),
+            commentId(o["id"]).orEmpty(),
             o["body"].textOrNull().orEmpty(),
             o["user"]?.jsonObject?.get("login").textOrNull().orEmpty(),
         )
@@ -1018,10 +1132,15 @@ class ThreadTalkClient(
         require(result.status in 200..299) { "github http ${result.status}" }
         val o = json.parseToJsonElement(result.body).jsonObject
         return ThreadMessage(
-            o["id"].textOrNull().orEmpty(),
+            commentId(o["id"]).orEmpty(),
             o["body"].textOrNull().orEmpty(),
             o["user"]?.jsonObject?.get("login").textOrNull().orEmpty(),
         )
+    }
+
+    private fun commentId(el: kotlinx.serialization.json.JsonElement?): String? {
+        val p = el as? JsonPrimitive ?: return null
+        return p.intOrNull?.toString() ?: p.contentOrNull
     }
 
     fun deleteComment(owner: String, repo: String, commentId: String, token: String) {

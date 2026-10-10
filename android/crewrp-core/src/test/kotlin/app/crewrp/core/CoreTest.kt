@@ -570,18 +570,59 @@ class ShellPresentationTest {
     }
 
     @Test
-    fun homeKeepsTodayUpcomingAndThreeNotices() {
+    fun homeKeepsTodayAndUpcomingTasks() {
         val tasks = listOf(
             TaskCard("a", "오늘", "접수", "2026-09-27T09:00:00"),
             TaskCard("b", "다음", "In Progress", "2026-10-01"),
             TaskCard("c", "끝", "Done", "2026-10-02"),
             TaskCard("d", "지난", "접수", "2026-09-01"),
         )
-        val notices = (1..4).map { Notice("n$it", "공지$it", "") }
-        val home = homeSections(tasks, notices, "2026-09-27")
+        val home = homeSections(tasks, "2026-09-27")
         assertEquals(listOf("a"), home.today.map { it.id })
         assertEquals(listOf("b"), home.upcoming.map { it.id })
-        assertEquals(listOf("n1", "n2", "n3"), home.notices.map { it.id })
+    }
+
+    @Test
+    fun listCategoriesParsesRepositoryCategories() {
+        val transport = HttpTransport { _, _, _, _ ->
+            HttpResult(
+                200,
+                """{"data":{"repository":{"id":"R1","discussionCategories":{"nodes":[
+                  {"id":"C1","name":"공지"},{"id":"C2","name":"자유"}
+                ]}}}}""",
+            )
+        }
+        val setup = DiscussionsClient(transport).listCategories("crew", "box", "t", forceNetwork = true)
+        assertEquals("R1", setup.repositoryId)
+        assertEquals(listOf("공지", "자유"), setup.categories.map { it.name })
+    }
+
+    @Test
+    fun listDiscussionsFiltersByCategoryId() {
+        val transport = HttpTransport { _, _, _, body ->
+            assertTrue(body!!.contains("categoryId"))
+            assertTrue(body.contains("CAT1"))
+            HttpResult(
+                200,
+                """{"data":{"repository":{"discussions":{"nodes":[
+                  {"id":"D1","title":"hello","body":"b","author":{"login":"ada"}}
+                ]}}}}""",
+            )
+        }
+        val items = DiscussionsClient(transport).listDiscussions("crew", "box", "CAT1", "t", forceNetwork = true)
+        assertEquals(listOf("D1"), items.map { it.id })
+        assertEquals("hello", items[0].title)
+    }
+
+    @Test
+    fun fetchReadmeReturnsNullOn404() {
+        JdbcCacheStore(":memory:").use { cache ->
+            val transport = HttpTransport { _, url, _, _ ->
+                assertTrue(url.endsWith("/contents/README.md"))
+                HttpResult(404, """{"message":"Not Found"}""")
+            }
+            assertNull(DocsClient(transport, cache).fetchReadme("crew", "box", "t"))
+        }
     }
 
     @Test
@@ -918,6 +959,16 @@ class ShellPresentationTest {
         })
         assertEquals(7, talk.ensureTalkIssueNumber("a", "b", "t"))
         assertTrue(created)
+    }
+
+    @Test
+    fun listIssueCommentsParsesNumericIds() {
+        val talk = ThreadTalkClient(HttpTransport { _, url, _, _ ->
+            assertTrue(url.endsWith("/issues/7/comments"))
+            HttpResult(200, """[{"id":99,"body":"ok","user":{"login":"ada"}}]""")
+        })
+        val items = talk.listIssueComments("a", "b", 7, "t")
+        assertEquals(listOf(ThreadMessage("99", "ok", "ada")), items)
     }
 
     @Test

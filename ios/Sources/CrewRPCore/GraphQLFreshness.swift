@@ -17,6 +17,14 @@ public enum GraphQLFreshness {
         "listNotices:\(owner)/\(repo)"
     }
 
+    public static func listDiscussionsQueryName(owner: String, repo: String, categoryId: String) -> String {
+        "listDiscussions:\(owner)/\(repo):\(categoryId)"
+    }
+
+    public static func listCategoriesQueryName(owner: String, repo: String) -> String {
+        "listCategories:\(owner)/\(repo)"
+    }
+
     public static func docsTreeQueryName(owner: String, repo: String) -> String {
         "docsTree:\(owner)/\(repo)"
     }

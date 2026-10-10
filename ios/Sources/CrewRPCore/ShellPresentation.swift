@@ -151,10 +151,9 @@ public func formatDue(_ iso: String?) -> String {
 public struct HomeSections: Equatable, Sendable {
     public let today: [TaskCard]
     public let upcoming: [TaskCard]
-    public let notices: [Notice]
 }
 
-public func homeSections(tasks: [TaskCard], notices: [Notice], today: String) -> HomeSections {
+public func homeSections(tasks: [TaskCard], today: String) -> HomeSections {
     let todayTasks = tasks.filter { $0.dueOn?.hasPrefix(today) == true }
     let upcoming = tasks
         .filter { card in
@@ -163,7 +162,7 @@ public func homeSections(tasks: [TaskCard], notices: [Notice], today: String) ->
         }
         .sorted { ($0.dueOn ?? "9999") < ($1.dueOn ?? "9999") }
         .prefix(3)
-    return HomeSections(today: todayTasks, upcoming: Array(upcoming), notices: Array(notices.prefix(3)))
+    return HomeSections(today: todayTasks, upcoming: Array(upcoming))
 }
 
 public enum DocBlock: Equatable, Sendable {

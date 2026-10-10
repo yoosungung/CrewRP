@@ -2,7 +2,8 @@ package app.crewrp
 
 import app.crewrp.core.AttachmentEntry
 import app.crewrp.core.CacheStore
-import app.crewrp.core.DiscussionSetup
+import app.crewrp.core.DiscussionCategory
+import app.crewrp.core.DiscussionRepoSetup
 import app.crewrp.core.DiscussionsClient
 import app.crewrp.core.DocEntry
 import app.crewrp.core.DocFile
@@ -15,6 +16,8 @@ import app.crewrp.core.ProjectsClient
 import app.crewrp.core.ReleaseAssetClient
 import app.crewrp.core.Session
 import app.crewrp.core.TaskCard
+import app.crewrp.core.ThreadMessage
+import app.crewrp.core.ThreadTalkClient
 import app.crewrp.core.UrlHttpTransport
 import app.crewrp.core.taskLane
 import java.util.concurrent.Callable
@@ -24,8 +27,14 @@ import java.util.concurrent.Future
 data class CrewContent(
     val tasks: List<TaskCard> = emptyList(),
     val tasksFailed: Boolean = false,
-    val notices: List<Notice> = emptyList(),
-    val noticesFailed: Boolean = false,
+    val readme: String = "",
+    val readmeFailed: Boolean = false,
+    val discussionCategories: List<DiscussionCategory> = emptyList(),
+    val discussionRepositoryId: String? = null,
+    val boardFailed: Boolean = false,
+    val selectedCategory: DiscussionCategory? = null,
+    val boardPosts: List<Notice> = emptyList(),
+    val taskComments: List<ThreadMessage> = emptyList(),
     val docs: List<DocEntry> = emptyList(),
     val docsTree: List<DocEntry> = emptyList(),
     val docsDirPath: String = "docs",
@@ -35,7 +44,6 @@ data class CrewContent(
     val docSha: String? = null,
     val docFailed: Boolean = false,
     val projectMeta: ProjectFieldMeta? = null,
-    val discussionSetup: DiscussionSetup? = null,
     val currentLogin: String? = null,
     val loading: Boolean = false,
     val writeError: String? = null,
@@ -56,7 +64,8 @@ fun fetchCrewContent(
 ): CrewContent {
     val (owner, repo) = parts(session) ?: return CrewContent(
         tasksFailed = true,
-        noticesFailed = true,
+        readmeFailed = true,
+        boardFailed = true,
         docFailed = true,
     )
     val transport = UrlHttpTransport()
@@ -86,14 +95,20 @@ fun fetchCrewContent(
                 Triple(tasks.getOrDefault(emptyList()), tasks.isFailure, meta.getOrNull())
             },
         )
-        val noticesF: Future<Triple<List<Notice>, Boolean, DiscussionSetup?>> = pool.submit(
+        val readmeF: Future<Pair<String, Boolean>> = pool.submit(
             Callable {
-                val discussions = DiscussionsClient(transport)
-                val notices = runCatching {
-                    discussions.listNotices(owner, repo, token, cache, forceNetwork)
+                val text = runCatching {
+                    DocsClient(transport, cache).fetchReadme(owner, repo, token).orEmpty()
                 }
-                val setup = runCatching { discussions.resolveSetup(owner, repo, token) }
-                Triple(notices.getOrDefault(emptyList()), notices.isFailure, setup.getOrNull())
+                text.getOrDefault("") to text.isFailure
+            },
+        )
+        val boardF: Future<Pair<DiscussionRepoSetup?, Boolean>> = pool.submit(
+            Callable {
+                val setup = runCatching {
+                    DiscussionsClient(transport).listCategories(owner, repo, token, cache, forceNetwork)
+                }
+                setup.getOrNull() to setup.isFailure
             },
         )
         val docsF: Future<DocsBundle> = pool.submit(
@@ -120,20 +135,23 @@ fun fetchCrewContent(
         )
 
         val tasks = tasksF.get()
-        val notices = noticesF.get()
+        val readme = readmeF.get()
+        val board = boardF.get()
         val docs = docsF.get()
         return CrewContent(
             tasks = tasks.first,
             tasksFailed = tasks.second,
-            notices = notices.first,
-            noticesFailed = notices.second,
+            readme = readme.first,
+            readmeFailed = readme.second,
+            discussionCategories = board.first?.categories.orEmpty(),
+            discussionRepositoryId = board.first?.repositoryId,
+            boardFailed = board.second,
             docs = docs.entries,
             docsTree = docs.tree,
             docsDirPath = docs.dirPath,
             attachments = attachmentsF.get(),
             docFailed = docs.failed,
             projectMeta = tasks.third,
-            discussionSetup = notices.third,
             currentLogin = loginF.get(),
         )
     } finally {
@@ -162,14 +180,17 @@ class CrewWriter(
     private fun resolvedProjectNumber(): Int =
         projects.resolveProjectNumber(session.org, projectNumber, token)
 
-    fun createNotice(title: String, body: String, setup: DiscussionSetup): Notice =
-        DiscussionsClient(transport).createNotice(setup.repositoryId, setup.categoryId, title, body, token)
+    fun createBoardPost(repositoryId: String, categoryId: String, title: String, body: String): Notice =
+        DiscussionsClient(transport).createNotice(repositoryId, categoryId, title, body, token)
 
-    fun updateNotice(id: String, title: String, body: String): Notice =
+    fun updateBoardPost(id: String, title: String, body: String): Notice =
         DiscussionsClient(transport).updateNotice(id, title, body, token)
 
-    fun deleteNotice(id: String) =
+    fun deleteBoardPost(id: String) =
         DiscussionsClient(transport).deleteNotice(id, token)
+
+    fun listBoardPosts(categoryId: String): List<Notice> =
+        DiscussionsClient(transport).listDiscussions(owner, repo, categoryId, token, cache, forceNetwork = true)
 
     fun createTask(title: String, body: String, statusLabel: String, dueOn: String?): TaskCard =
         projects.createTask(owner, repo, title, body, resolvedProjectNumber(), token, dueOn, statusLabel)
@@ -222,4 +243,16 @@ class CrewWriter(
 
     fun downloadAttachment(asset: AttachmentEntry): ByteArray =
         ReleaseAssetClient(transport).downloadBytes(asset, token)
+
+    fun listTaskComments(issueNumber: Int): List<ThreadMessage> =
+        ThreadTalkClient(transport).listIssueComments(owner, repo, issueNumber, token)
+
+    fun postTaskComment(issueNumber: Int, body: String): ThreadMessage =
+        ThreadTalkClient(transport).postComment(owner, repo, issueNumber, body, token)
+
+    fun updateTaskComment(commentId: String, body: String): ThreadMessage =
+        ThreadTalkClient(transport).updateComment(owner, repo, commentId, body, token)
+
+    fun deleteTaskComment(commentId: String) =
+        ThreadTalkClient(transport).deleteComment(owner, repo, commentId, token)
 }

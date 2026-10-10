@@ -98,6 +98,7 @@ import app.crewrp.CrewContent
 import app.crewrp.core.AccountLink
 import app.crewrp.core.AttachmentEntry
 import app.crewrp.core.CrewRepo
+import app.crewrp.core.DiscussionCategory
 import app.crewrp.core.DocBlock
 import app.crewrp.core.DocEntry
 import app.crewrp.core.DocsLibraryItem
@@ -106,6 +107,7 @@ import app.crewrp.core.Session
 import app.crewrp.core.TaskCard
 import app.crewrp.core.TaskLane
 import app.crewrp.core.TeamRole
+import app.crewrp.core.ThreadMessage
 import android.provider.OpenableColumns
 import app.crewrp.core.canMutate
 import app.crewrp.core.crewDisplayName
@@ -153,9 +155,11 @@ private fun libraryIcon(item: DocsLibraryItem): ImageVector =
     }
 
 data class CrewActions(
-    val onCreateNotice: (title: String, body: String) -> Unit,
-    val onUpdateNotice: (Notice, title: String, body: String) -> Unit,
-    val onDeleteNotice: (Notice) -> Unit,
+    val onCreateBoardPost: (categoryId: String, title: String, body: String) -> Unit,
+    val onUpdateBoardPost: (Notice, title: String, body: String) -> Unit,
+    val onDeleteBoardPost: (Notice) -> Unit,
+    val onOpenBoardCategory: (DiscussionCategory) -> Unit,
+    val onClearBoardCategory: () -> Unit,
     val onCreateTask: (title: String, body: String, status: String, dueOn: String?) -> Unit,
     val onUpdateTask: (TaskCard, title: String, body: String, status: String, dueOn: String?) -> Unit,
     val onDeleteTask: (TaskCard) -> Unit,
@@ -165,6 +169,10 @@ data class CrewActions(
     val onListDocs: (path: String) -> Unit,
     val onUploadAttachment: (name: String, bytes: ByteArray, contentType: String) -> Unit,
     val onOpenAttachment: (AttachmentEntry) -> Unit,
+    val onLoadTaskComments: (issueNumber: Int) -> Unit,
+    val onPostTaskComment: (issueNumber: Int, body: String) -> Unit,
+    val onUpdateTaskComment: (commentId: String, body: String) -> Unit,
+    val onDeleteTaskComment: (commentId: String) -> Unit,
 )
 
 private data class Destination(val label: String, val selectedIcon: ImageVector, val icon: ImageVector)
@@ -292,12 +300,7 @@ fun CrewShell(
     val name = crewDisplayName(session.repo)
 
     LaunchedEffect(tab) {
-        if (tab != 3) return@LaunchedEffect
-        onLoadCrewSettings()
-        when {
-            discordLink != null && discordEnabled -> onDiscord()
-            discordLink == null -> onLinkDiscord()
-        }
+        if (tab == 3) onLoadCrewSettings()
     }
 
     Scaffold(
@@ -319,12 +322,9 @@ fun CrewShell(
         },
         floatingActionButton = {
             when (tab) {
-                0, 1 -> FloatingActionButton(onClick = {
-                    compose = when (tab) {
-                        0 -> ComposeKind.Notice
-                        else -> ComposeKind.Task
-                    }
-                }) { Icon(Icons.Filled.Add, contentDescription = "작성") }
+                1 -> FloatingActionButton(onClick = { compose = ComposeKind.Task }) {
+                    Icon(Icons.Filled.Add, contentDescription = "작성")
+                }
                 2 -> Box {
                     FloatingActionButton(onClick = { docsAddMenu = true }) {
                         Icon(Icons.Filled.Add, contentDescription = "추가")
@@ -344,6 +344,11 @@ fun CrewShell(
                                 pickAttachment.launch(arrayOf("*/*"))
                             },
                         )
+                    }
+                }
+                3 -> if (content.selectedCategory != null) {
+                    FloatingActionButton(onClick = { compose = ComposeKind.BoardPost }) {
+                        Icon(Icons.Filled.Add, contentDescription = "글 작성")
                     }
                 }
             }
@@ -372,7 +377,7 @@ fun CrewShell(
                 )
             }
             when (tab) {
-                0 -> HomeTab(session, content, Modifier.weight(1f), onOpenNotice = { editingNotice = it })
+                0 -> HomeTab(session, content, Modifier.weight(1f))
                 1 -> TasksTab(content, Modifier.weight(1f), onRefresh, onOpen = { editingTask = it })
                 2 -> DocsTab(
                     content,
@@ -382,6 +387,7 @@ fun CrewShell(
                     onOpenDetail = { viewingDoc = true },
                 )
                 else -> TalkTab(
+                    content = content,
                     discordLink = discordLink,
                     discordEnabled = discordEnabled,
                     isAdmin = isAdmin,
@@ -394,19 +400,28 @@ fun CrewShell(
                     onUnlink = onUnlinkDiscord,
                     onDiscord = onDiscord,
                     onSaveDiscordSettings = onSaveDiscordSettings,
+                    onOpenCategory = actions.onOpenBoardCategory,
+                    onClearCategory = actions.onClearBoardCategory,
+                    onOpenPost = { editingNotice = it },
                 )
             }
         }
     }
 
     when (val kind = compose) {
-        ComposeKind.Notice -> FormDialog(
-            title = "공지 작성",
+        ComposeKind.BoardPost -> FormDialog(
+            title = "글 작성",
             onDismiss = { compose = null },
-            onSubmit = { t, b -> actions.onCreateNotice(t, b); compose = null },
+            onSubmit = { t, b ->
+                val cat = content.selectedCategory ?: return@FormDialog
+                actions.onCreateBoardPost(cat.id, t, b)
+                compose = null
+            },
         )
         ComposeKind.Task -> TaskFormDialog(
-            title = "할 일 추가",
+            content = content,
+            actions = actions,
+            role = session.teamRole,
             onDismiss = { compose = null },
             onSubmit = { t, body, status, due ->
                 actions.onCreateTask(t, body, status, due)
@@ -446,18 +461,20 @@ fun CrewShell(
 
     editingNotice?.let { notice ->
         FormDialog(
-            title = "공지 수정",
+            title = "글 수정",
             initialTitle = notice.title,
             initialBody = notice.body,
             showDelete = canMutate(session.teamRole, notice.authorLogin, content.currentLogin),
             onDismiss = { editingNotice = null },
-            onSubmit = { t, b -> actions.onUpdateNotice(notice, t, b); editingNotice = null },
-            onDelete = { actions.onDeleteNotice(notice); editingNotice = null },
+            onSubmit = { t, b -> actions.onUpdateBoardPost(notice, t, b); editingNotice = null },
+            onDelete = { actions.onDeleteBoardPost(notice); editingNotice = null },
         )
     }
     editingTask?.let { task ->
         TaskFormDialog(
-            title = "할 일 수정",
+            content = content,
+            actions = actions,
+            role = session.teamRole,
             task = task,
             showDelete = session.teamRole == TeamRole.ADMIN,
             onDismiss = { editingTask = null },
@@ -470,12 +487,14 @@ fun CrewShell(
     }
 }
 
-private enum class ComposeKind { Notice, Task, Doc }
+private enum class ComposeKind { BoardPost, Task, Doc }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TaskFormDialog(
-    title: String,
+    content: CrewContent,
+    actions: CrewActions,
+    role: TeamRole,
     onDismiss: () -> Unit,
     onSubmit: (title: String, body: String, status: String, dueOn: String?) -> Unit,
     task: TaskCard? = null,
@@ -487,11 +506,22 @@ private fun TaskFormDialog(
     var status by remember { mutableStateOf(task?.let { taskStatusChoice(it.status) } ?: TaskLane.INBOX.title) }
     var due by remember { mutableStateOf(dueOnInput(task?.dueOn)) }
     var statusExpanded by remember { mutableStateOf(false) }
+    var draftComment by remember { mutableStateOf("") }
+    var editingComment by remember { mutableStateOf<ThreadMessage?>(null) }
+    var editDraft by remember { mutableStateOf("") }
+    val issueNumber = task?.issueNumber
+    val dialogTitle = fieldTitle.trim().ifEmpty { "새 할 일" }
+    LaunchedEffect(issueNumber) {
+        if (issueNumber != null) actions.onLoadTaskComments(issueNumber)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
+        title = { Text(dialogTitle, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.heightIn(max = 480.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 OutlinedTextField(
                     fieldTitle,
                     { fieldTitle = it },
@@ -542,6 +572,47 @@ private fun TaskFormDialog(
                             }
                         },
                 )
+                if (issueNumber != null) {
+                    Text("댓글", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    if (content.taskComments.isEmpty()) {
+                        Text("아직 댓글이 없습니다.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        LazyColumn(Modifier.heightIn(max = 160.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(content.taskComments, key = { it.id }) { comment ->
+                                Column {
+                                    Text("@${comment.author}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(comment.body, style = MaterialTheme.typography.bodyMedium)
+                                    if (canMutate(role, comment.author, content.currentLogin)) {
+                                        Row {
+                                            TextButton(onClick = {
+                                                editingComment = comment
+                                                editDraft = comment.body
+                                            }) { Text("수정") }
+                                            TextButton(onClick = { actions.onDeleteTaskComment(comment.id) }) { Text("삭제") }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        draftComment,
+                        { draftComment = it },
+                        label = { Text("댓글 작성") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                    )
+                    TextButton(
+                        onClick = {
+                            val text = draftComment.trim()
+                            if (text.isNotEmpty()) {
+                                actions.onPostTaskComment(issueNumber, text)
+                                draftComment = ""
+                            }
+                        },
+                        enabled = draftComment.isNotBlank(),
+                    ) { Text("댓글 등록") }
+                }
             }
         },
         confirmButton = {
@@ -562,6 +633,22 @@ private fun TaskFormDialog(
             }
         },
     )
+    editingComment?.let { comment ->
+        AlertDialog(
+            onDismissRequest = { editingComment = null },
+            title = { Text("댓글 수정") },
+            text = {
+                OutlinedTextField(editDraft, { editDraft = it }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    actions.onUpdateTaskComment(comment.id, editDraft)
+                    editingComment = null
+                }) { Text("저장") }
+            },
+            dismissButton = { TextButton(onClick = { editingComment = null }) { Text("취소") } },
+        )
+    }
 }
 
 @Composable
@@ -653,14 +740,14 @@ private fun FormDialog(
 }
 
 @Composable
-private fun HomeTab(session: Session, content: CrewContent, modifier: Modifier, onOpenNotice: (Notice) -> Unit) {
+private fun HomeTab(session: Session, content: CrewContent, modifier: Modifier) {
     val today = LocalDate.now().toString()
-    val sections = homeSections(content.tasks, content.notices, today)
-    val quiet = sections.today.isEmpty() && sections.upcoming.isEmpty() && sections.notices.isEmpty()
+    val sections = homeSections(content.tasks, today)
+    val quiet = sections.today.isEmpty() && sections.upcoming.isEmpty() && content.readme.isEmpty()
     when {
-        content.loading && content.tasks.isEmpty() && content.notices.isEmpty() -> LoadingPane(modifier)
-        quiet && (content.tasksFailed || content.noticesFailed) -> FailedPane(modifier)
-        quiet -> EmptyPane(modifier, "아직 소식이 없습니다", "공지와 할 일이 생기면 홈에 모입니다.")
+        content.loading && content.tasks.isEmpty() && content.readme.isEmpty() -> LoadingPane(modifier)
+        quiet && (content.tasksFailed || content.readmeFailed) -> FailedPane(modifier)
+        quiet -> EmptyPane(modifier, "아직 소식이 없습니다", "할 일을 추가하거나 README를 등록해 보세요.")
         else -> LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -670,25 +757,23 @@ private fun HomeTab(session: Session, content: CrewContent, modifier: Modifier, 
                     }
                 }
             }
-            if (sections.today.isNotEmpty()) {
-                item { Text("오늘 할 일", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
-                items(sections.today, key = { it.id }) { TaskRow(it) }
-            }
-            if (sections.notices.isNotEmpty()) {
-                item { Text("고정 공지", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
-                items(sections.notices, key = { it.id }) { notice ->
-                    Card(
-                        Modifier.fillMaxWidth().clickable { onOpenNotice(notice) },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    ) {
-                        Column(Modifier.padding(14.dp)) {
-                            Text(notice.title, style = MaterialTheme.typography.titleMedium)
-                            if (notice.body.isNotBlank()) {
-                                Text(notice.body, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (content.readme.isNotEmpty()) {
+                item { Text("소개", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        docBlocks(content.readme).forEach { block ->
+                            when (block) {
+                                is DocBlock.Heading -> Text(block.text, style = MaterialTheme.typography.titleMedium)
+                                is DocBlock.Bullet -> Text("·  ${block.text}")
+                                is DocBlock.Paragraph -> Text(block.text, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
                 }
+            }
+            if (sections.today.isNotEmpty()) {
+                item { Text("오늘 할 일", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
+                items(sections.today, key = { it.id }) { TaskRow(it) }
             }
             if (sections.upcoming.isNotEmpty()) {
                 item { Text("다가오는 할 일", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
@@ -951,6 +1036,7 @@ private fun DocDetailDialog(
 
 @Composable
 private fun TalkTab(
+    content: CrewContent,
     discordLink: AccountLink?,
     discordEnabled: Boolean,
     isAdmin: Boolean,
@@ -963,45 +1049,99 @@ private fun TalkTab(
     onUnlink: () -> Unit,
     onDiscord: () -> Unit,
     onSaveDiscordSettings: () -> Unit,
+    onOpenCategory: (DiscussionCategory) -> Unit,
+    onClearCategory: () -> Unit,
+    onOpenPost: (Notice) -> Unit,
 ) {
-    Column(
-        modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+    LazyColumn(
+        modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (discordLink != null) {
-            Text(
-                "연결됨: @${discordLink.username}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (discordEnabled) {
-                Button(onClick = onDiscord, Modifier.fillMaxWidth()) { Text("바로 대화") }
-            } else if (isAdmin) {
-                Text(
-                    "이 크루 Discord 서버·채널을 repo에 등록합니다.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedTextField(serverDraft, onServerDraft, Modifier.fillMaxWidth(), label = { Text("서버 ID") })
-                OutlinedTextField(channelDraft, onChannelDraft, Modifier.fillMaxWidth(), label = { Text("채널 ID") })
-                Button(onClick = onSaveDiscordSettings, Modifier.fillMaxWidth()) { Text("서버·채널 저장") }
-            } else {
-                Text(
-                    "운영진이 Discord 서버·채널을 등록하면 바로 대화를 열 수 있습니다.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        item {
+            Text("바로 대화", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (discordLink != null) {
+                    Text(
+                        "연결됨: @${discordLink.username}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (discordEnabled) {
+                        Button(onClick = onDiscord, Modifier.fillMaxWidth()) { Text("바로 대화") }
+                    } else if (isAdmin) {
+                        Text(
+                            "이 크루 Discord 서버·채널을 repo에 등록합니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedTextField(serverDraft, onServerDraft, Modifier.fillMaxWidth(), label = { Text("서버 ID") })
+                        OutlinedTextField(channelDraft, onChannelDraft, Modifier.fillMaxWidth(), label = { Text("채널 ID") })
+                        Button(onClick = onSaveDiscordSettings, Modifier.fillMaxWidth()) { Text("서버·채널 저장") }
+                    } else {
+                        Text(
+                            "운영진이 Discord 서버·채널을 등록하면 바로 대화를 열 수 있습니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = onUnlink) { Text("Discord 연결 해제") }
+                } else {
+                    Text(
+                        "잡담과 음성은 Discord에서 이어갑니다.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(onClick = onLink, Modifier.fillMaxWidth()) { Text("Discord 연결") }
+                }
             }
-            TextButton(onClick = onUnlink) { Text("Discord 연결 해제") }
+        }
+        val category = content.selectedCategory
+        if (category != null) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onClearCategory) { Text("← 게시판") }
+                    Text(category.name, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            when {
+                content.boardFailed && content.boardPosts.isEmpty() ->
+                    item { Text("글을 불러오지 못했습니다.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                content.boardPosts.isEmpty() ->
+                    item { Text("글이 없습니다. + 로 작성하세요.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                else -> items(content.boardPosts, key = { it.id }) { post ->
+                    Card(
+                        Modifier.fillMaxWidth().clickable { onOpenPost(post) },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text(post.title, style = MaterialTheme.typography.titleMedium)
+                            if (post.body.isNotBlank()) {
+                                Text(post.body, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
         } else {
-            Text(
-                "잡담과 음성은 Discord에서 이어갑니다.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(onClick = onLink, Modifier.fillMaxWidth()) { Text("Discord 연결") }
+            item {
+                Text("게시판", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            }
+            when {
+                content.boardFailed && content.discussionCategories.isEmpty() ->
+                    item { Text("카테고리를 불러오지 못했습니다.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                content.discussionCategories.isEmpty() ->
+                    item { Text("게시판 카테고리가 없습니다.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                else -> items(content.discussionCategories, key = { it.id }) { cat ->
+                    Card(
+                        Modifier.fillMaxWidth().clickable { onOpenCategory(cat) },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    ) {
+                        Text(cat.name, Modifier.padding(14.dp), style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            }
         }
     }
 }

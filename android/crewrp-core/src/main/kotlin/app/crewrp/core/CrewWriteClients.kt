@@ -17,6 +17,10 @@ import kotlinx.serialization.json.putJsonObject
 
 data class DiscussionSetup(val repositoryId: String, val categoryId: String)
 
+data class DiscussionCategory(val id: String, val name: String)
+
+data class DiscussionRepoSetup(val repositoryId: String, val categories: List<DiscussionCategory>)
+
 @Serializable
 data class DocEntry(val path: String, val name: String, val sha: String?, val isDir: Boolean)
 

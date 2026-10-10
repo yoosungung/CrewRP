@@ -193,7 +193,8 @@ class MainActivity : ComponentActivity() {
                 if (token == null) {
                     content = CrewContent(
                         tasksFailed = true,
-                        noticesFailed = true,
+                        readmeFailed = true,
+                        boardFailed = true,
                         docFailed = true,
                     )
                     return@LaunchedEffect
@@ -215,7 +216,15 @@ class MainActivity : ComponentActivity() {
                         if (request != loadId) return@runOnUiThread
                         content = loaded.copy(
                             tasks = if (loaded.tasksFailed && previous.tasks.isNotEmpty()) previous.tasks else loaded.tasks,
-                            notices = if (loaded.noticesFailed && previous.notices.isNotEmpty()) previous.notices else loaded.notices,
+                            readme = if (loaded.readmeFailed && previous.readme.isNotEmpty()) previous.readme else loaded.readme,
+                            discussionCategories = if (loaded.boardFailed && previous.discussionCategories.isNotEmpty()) {
+                                previous.discussionCategories
+                            } else {
+                                loaded.discussionCategories
+                            },
+                            discussionRepositoryId = loaded.discussionRepositoryId ?: previous.discussionRepositoryId,
+                            selectedCategory = previous.selectedCategory,
+                            boardPosts = previous.boardPosts,
                             docs = if (loaded.docFailed && previous.docs.isNotEmpty()) previous.docs else loaded.docs,
                             docsTree = if (loaded.docFailed && previous.docsTree.isNotEmpty()) previous.docsTree else loaded.docsTree,
                             docsDirPath = if (loaded.docFailed && previous.docs.isNotEmpty()) previous.docsDirPath else loaded.docsDirPath,
@@ -272,14 +281,54 @@ class MainActivity : ComponentActivity() {
                             onServerDraft = { serverDraft = it },
                             onChannelDraft = { channelDraft = it },
                             actions = CrewActions(
-                                onCreateNotice = { title, body ->
-                                    val setup = content.discussionSetup ?: return@CrewActions
-                                    runWrite { it.createNotice(title, body, setup) }
+                                onCreateBoardPost = { categoryId, title, body ->
+                                    val repoId = content.discussionRepositoryId ?: return@CrewActions
+                                    runWrite { writer ->
+                                        writer.createBoardPost(repoId, categoryId, title, body)
+                                        val posts = writer.listBoardPosts(categoryId)
+                                        runOnUiThread {
+                                            content = content.copy(boardPosts = posts, writeError = null)
+                                        }
+                                    }
                                 },
-                                onUpdateNotice = { notice, title, body ->
-                                    runWrite { it.updateNotice(notice.id, title, body) }
+                                onUpdateBoardPost = { notice, title, body ->
+                                    runWrite { writer ->
+                                        writer.updateBoardPost(notice.id, title, body)
+                                        content.selectedCategory?.let { cat ->
+                                            val posts = writer.listBoardPosts(cat.id)
+                                            runOnUiThread {
+                                                content = content.copy(boardPosts = posts, writeError = null)
+                                            }
+                                        }
+                                    }
                                 },
-                                onDeleteNotice = { notice -> runWrite { it.deleteNotice(notice.id) } },
+                                onDeleteBoardPost = { notice ->
+                                    runWrite { writer ->
+                                        writer.deleteBoardPost(notice.id)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                boardPosts = content.boardPosts.filter { it.id != notice.id },
+                                                writeError = null,
+                                            )
+                                        }
+                                    }
+                                },
+                                onOpenBoardCategory = { cat ->
+                                    runWrite(refresh = false) { writer ->
+                                        val posts = writer.listBoardPosts(cat.id)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                selectedCategory = cat,
+                                                boardPosts = posts,
+                                                boardFailed = false,
+                                                writeError = null,
+                                            )
+                                        }
+                                    }
+                                },
+                                onClearBoardCategory = {
+                                    content = content.copy(selectedCategory = null, boardPosts = emptyList())
+                                },
                                 onCreateTask = { title, body, status, due ->
                                     runWrite { it.createTask(title, body, status, due) }
                                 },
@@ -363,6 +412,49 @@ class MainActivity : ComponentActivity() {
                                             } catch (_: ActivityNotFoundException) {
                                                 startActivity(Intent.createChooser(share, asset.name))
                                             }
+                                        }
+                                    }
+                                },
+                                onLoadTaskComments = { issueNumber ->
+                                    runWrite(refresh = false) { writer ->
+                                        val comments = writer.listTaskComments(issueNumber)
+                                        runOnUiThread {
+                                            content = content.copy(taskComments = comments, writeError = null)
+                                        }
+                                    }
+                                },
+                                onPostTaskComment = { issueNumber, body ->
+                                    runWrite(refresh = false) { writer ->
+                                        val msg = writer.postTaskComment(issueNumber, body)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                taskComments = content.taskComments + msg,
+                                                writeError = null,
+                                            )
+                                        }
+                                    }
+                                },
+                                onUpdateTaskComment = { commentId, body ->
+                                    runWrite(refresh = false) { writer ->
+                                        val msg = writer.updateTaskComment(commentId, body)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                taskComments = content.taskComments.map {
+                                                    if (it.id == commentId) msg else it
+                                                },
+                                                writeError = null,
+                                            )
+                                        }
+                                    }
+                                },
+                                onDeleteTaskComment = { commentId ->
+                                    runWrite(refresh = false) { writer ->
+                                        writer.deleteTaskComment(commentId)
+                                        runOnUiThread {
+                                            content = content.copy(
+                                                taskComments = content.taskComments.filter { it.id != commentId },
+                                                writeError = null,
+                                            )
                                         }
                                     }
                                 },

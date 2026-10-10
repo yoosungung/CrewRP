@@ -19,6 +19,21 @@ public struct DiscussionSetup: Sendable, Equatable {
     public let categoryId: String
 }
 
+public struct DiscussionCategory: Sendable, Equatable, Identifiable, Codable {
+    public let id: String
+    public let name: String
+
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
+public struct DiscussionRepoSetup: Sendable, Equatable {
+    public let repositoryId: String
+    public let categories: [DiscussionCategory]
+}
+
 public struct PollOption: Sendable, Equatable {
     public let id: String
     public let text: String
@@ -108,7 +123,18 @@ public struct DiscussionsClient: Sendable {
         return Notice(id: n.id, title: n.title, body: n.body, authorLogin: n.author?.login)
     }
 
-    public func resolveSetup(owner: String, repo: String, token: String) async throws -> DiscussionSetup {
+    public func listCategories(
+        owner: String,
+        repo: String,
+        token: String,
+        cache: CacheStore? = nil,
+        forceNetwork: Bool = false,
+        now: Date = Date()
+    ) async throws -> DiscussionRepoSetup {
+        let queryName = GraphQLFreshness.listCategoriesQueryName(owner: owner, repo: repo)
+        if !forceNetwork, let cache, let cached = GraphQLFreshness.freshBody(cache: cache, queryName: queryName, now: now) {
+            return try JSONDecoder().decode(DiscussionRepoSetupDTO.self, from: cached).asSetup()
+        }
         let query = """
         query($owner:String!,$name:String!){
           repository(owner:$owner,name:$name){
@@ -133,10 +159,87 @@ public struct DiscussionsClient: Sendable {
             let data: DataObj
         }
         let repoNode = try JSONDecoder().decode(Envelope.self, from: data).data.repository
-        let preferred = repoNode.discussionCategories.nodes.first { $0.name.contains("공지") }
-            ?? repoNode.discussionCategories.nodes.first
+        let cats = repoNode.discussionCategories.nodes.map { DiscussionCategory(id: $0.id, name: $0.name) }
+        let setup = DiscussionRepoSetup(repositoryId: repoNode.id, categories: cats)
+        if let cache, let encoded = try? JSONEncoder().encode(DiscussionRepoSetupDTO(from: setup)) {
+            GraphQLFreshness.store(cache: cache, queryName: queryName, body: encoded, now: now)
+        }
+        return setup
+    }
+
+    public func listDiscussions(
+        owner: String,
+        repo: String,
+        categoryId: String,
+        token: String,
+        cache: CacheStore? = nil,
+        forceNetwork: Bool = false,
+        now: Date = Date()
+    ) async throws -> [Notice] {
+        let queryName = GraphQLFreshness.listDiscussionsQueryName(owner: owner, repo: repo, categoryId: categoryId)
+        if !forceNetwork, let cache, let cached = GraphQLFreshness.freshBody(cache: cache, queryName: queryName, now: now) {
+            return try JSONDecoder().decode([Notice].self, from: cached)
+        }
+        let query = """
+        query($owner:String!,$name:String!,$categoryId:ID!){
+          repository(owner:$owner,name:$name){
+            discussions(first:20, categoryId:$categoryId){ nodes { id title body author { login } } }
+          }
+        }
+        """
+        let data = try await graphql(
+            token: token,
+            query: query,
+            variables: ["owner": owner, "name": repo, "categoryId": categoryId]
+        )
+        struct Envelope: Decodable {
+            struct DataObj: Decodable {
+                struct Repo: Decodable {
+                    struct Discussions: Decodable {
+                        struct Node: Decodable {
+                            let id: String
+                            let title: String
+                            let body: String
+                            let author: Author?
+                            struct Author: Decodable { let login: String }
+                        }
+                        let nodes: [Node]
+                    }
+                    let discussions: Discussions
+                }
+                let repository: Repo?
+            }
+            let data: DataObj
+        }
+        let decoded = try JSONDecoder().decode(Envelope.self, from: data)
+        let notices = (decoded.data.repository?.discussions.nodes ?? []).map {
+            Notice(id: $0.id, title: $0.title, body: $0.body, authorLogin: $0.author?.login)
+        }
+        if let cache, let encoded = try? JSONEncoder().encode(notices) {
+            GraphQLFreshness.store(cache: cache, queryName: queryName, body: encoded, now: now)
+        }
+        return notices
+    }
+
+    public func resolveSetup(owner: String, repo: String, token: String) async throws -> DiscussionSetup {
+        let setup = try await listCategories(owner: owner, repo: repo, token: token, forceNetwork: true)
+        let preferred = setup.categories.first { $0.name.contains("공지") } ?? setup.categories.first
         guard let preferred else { throw GitHubAPIError.invalidResponse }
-        return DiscussionSetup(repositoryId: repoNode.id, categoryId: preferred.id)
+        return DiscussionSetup(repositoryId: setup.repositoryId, categoryId: preferred.id)
+    }
+
+    private struct DiscussionRepoSetupDTO: Codable {
+        let repositoryId: String
+        let categories: [DiscussionCategory]
+
+        init(from setup: DiscussionRepoSetup) {
+            repositoryId = setup.repositoryId
+            categories = setup.categories
+        }
+
+        func asSetup() -> DiscussionRepoSetup {
+            DiscussionRepoSetup(repositoryId: repositoryId, categories: categories)
+        }
     }
 
     public func createNotice(repositoryId: String, categoryId: String, title: String, body: String, token: String) async throws -> Notice {

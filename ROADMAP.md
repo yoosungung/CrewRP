@@ -41,6 +41,20 @@
 - [ ] Discord OAuth App·서버/채널 ID 실키 투입 후 수동 E2E (`DISCORD_CLIENT_*` Worker 시크릿 + 앱 `DiscordClientID`/`DISCORD_CLIENT_ID`)
 - 완료 기준: GitHub 로그인 후 Discord 연동 → 소통에서 딥링크 진입, 해제·로그아웃 시 연동 기록 없음
 
+## Phase 5 — 소통 허브 + 홈 README
+
+- [x] 홈: repo `README.md` Contents 렌더, 고정 공지 섹션·홈 공지 작성 제거
+- [x] 소통: Discord 상단 + Discussions 카테고리 → 글 CRUD (탭 자동 딥링크 제거)
+- [x] `listCategories` / 카테고리별 `listDiscussions` 코어·테스트
+- [ ] 홈 README·소통 카테고리 글 수동 E2E
+- 완료 기준: 홈에서 README, 소통에서 바로 대화·카테고리 글 작성·열람 수동 확인
+
+## Phase 6 — 할 일 댓글
+
+- [x] 할 일 상세에서 Issue comments 목록·작성·수정·삭제 (`ThreadTalkClient`)
+- [ ] 수동 E2E: 할 일 열고 댓글 1회 작성·수정·삭제
+- 완료 기준: issueNumber 있는 할 일에서 댓글 CRUD 확인
+
 ## 미결정
 
 - **투표 생성.** `createDiscussion`에 poll 필드가 없다. 앱에서 투표를 만들 API가 생기기 전에는 만들지 않는다.

@@ -240,6 +240,15 @@ public struct DocsClient: Sendable {
         return DocFile(path: dto.path, content: text, sha: dto.sha)
     }
 
+    /// Repo root README for home. Missing file → nil (not an error).
+    public func fetchReadme(owner: String, repo: String, token: String) async throws -> String? {
+        do {
+            return try await fetchMarkdown(owner: owner, repo: repo, path: "README.md", token: token).content
+        } catch GitHubAPIError.httpStatus(404) {
+            return nil
+        }
+    }
+
     public func saveMarkdown(owner: String, repo: String, path: String, content: String, token: String, sha: String?) async throws -> DocFile {
         guard path.hasPrefix("docs/") else { throw GitHubAPIError.invalidResponse }
         var request = URLRequest(url: apiBase.appending(path: "repos/\(owner)/\(repo)/contents/\(path)"))
