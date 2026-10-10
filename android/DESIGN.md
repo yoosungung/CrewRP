@@ -46,7 +46,7 @@ adb -d shell am start -n app.crewrp/.MainActivity
 - 불러오기 실패는 원인 원문 대신 다시 시도를 보여 준다. Discord 식별자가 비어 있으면 바로 대화 버튼을 숨긴다.
 - OAuth PKCE `state`/`code_verifier`는 EncryptedSharedPreferences에 둔다. 브라우저에서 돌아올 때 Activity가 다시 만들어져도 교환이 된다. 토큰 교환은 백그라운드 스레드에서 한다.
 - 공지·할 일·자료실·소통은 앱에서 CRUD한다. 탭의 `+`로 작성, 항목 탭으로 상세·수정·삭제. 운영진은 전 항목, 멤버는 본인 작성분만 수정·삭제.
-- 자료실은 목록(파일·폴더) → 다이얼로그 상세(렌더·편집·삭제). `listDocs(path)`로 폴더 드릴다운·상위 복귀. 검색어가 있으면 `listDocsTree` 재귀 인덱스에서 이름·경로 필터(폴더 안 파일 포함). 검색 중 목록(바깥)을 누르면 포커스·키보드를 닫는다. compact에서 목록+본문 split을 쓰지 않는다.
+- 자료실은 **문서(md)** + **첨부(Release Assets)** . 문서: 목록 → 다이얼로그 상세(렌더·편집·삭제). `listDocs(path)` 드릴다운·상위 복귀. 검색 시 `listDocsTree` + 첨부 이름 필터. `+`는 「문서 작성」|「파일 첨부」. 첨부는 `ReleaseAssetClient`로 `crewrp-attachments`에 업로드·목록. 탭 시 이미지/PDF는 `ACTION_VIEW`, 그 외 Share/Download. 검색 중 목록(바깥) 탭으로 포커스·키보드를 닫는다. compact에서 목록+본문 split을 쓰지 않는다.
 - OAuth scope는 `read:org repo project`(authorize URL에 포함). Projects v2 쓰기는 `project`가 필요하므로 스코프 변경 후에는 재로그인한다.
 - 소통 탭은 Discord다. 탭 선택 시 연동·**활성 크루** `.crewrp/settings.json`의 서버·채널이 있으면 딥링크를 바로 열고, 미연동이면 OAuth 연결을 시작한다. Issue 말풍선은 소통 본체가 아니다. `fetchCrewContent`에서 Issue 톡 API를 호출하지 않는다.
 - Discord 연동은 `account_link`에 user id·표시 이름만 두고, Discord 액세스 토큰은 보관하지 않는다. 앱 로그아웃 시 연동도 지운다.

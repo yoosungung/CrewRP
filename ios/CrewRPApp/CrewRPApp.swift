@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
+import QuickLook
 import CrewRPCore
 import os
 
@@ -26,6 +28,7 @@ final class AppModel: ObservableObject {
     @Published var docs: [DocEntry] = []
     @Published var docsTree: [DocEntry] = []
     @Published var docsDirPath: String = "docs"
+    @Published var attachments: [AttachmentEntry] = []
     @Published var isLoading = false
     @Published var tasksFailed = false
     @Published var noticesFailed = false
@@ -166,6 +169,7 @@ final class AppModel: ObservableObject {
         docs = []
         docsTree = []
         docsDirPath = "docs"
+        attachments = []
         discordLink = nil
         crewSettings = nil
         discordServerDraft = ""
@@ -205,6 +209,7 @@ final class AppModel: ObservableObject {
             var docsTree: [DocEntry] = []
             var docsDirPath: String
             var docFailed = false
+            var attachments: [AttachmentEntry] = []
         }
 
         let snapshot = await Task.detached(priority: .userInitiated) { () -> Snapshot in
@@ -275,6 +280,11 @@ final class AppModel: ObservableObject {
                 return (entries, tree, listPath, folderFailed)
             }()
 
+            async let attachmentsTask: [AttachmentEntry] = {
+                (try? await ReleaseAssetClient(transport: transport)
+                    .listAttachments(owner: owner, repo: repo, token: token)) ?? []
+            }()
+
             let tasks = await tasksTask
             let notices = await noticesTask
             let docs = await docsTask
@@ -289,7 +299,8 @@ final class AppModel: ObservableObject {
                 docs: docs.entries,
                 docsTree: docs.tree,
                 docsDirPath: docs.dir,
-                docFailed: docs.failed
+                docFailed: docs.failed,
+                attachments: await attachmentsTask
             )
         }.value
 
@@ -312,6 +323,7 @@ final class AppModel: ObservableObject {
             docsTree = snapshot.docsTree
         }
         docFailed = snapshot.docFailed
+        attachments = snapshot.attachments
 
         if !didRegisterPush {
             didRegisterPush = true
@@ -466,6 +478,43 @@ final class AppModel: ObservableObject {
         await withToken { token, owner, repo in
             try await DocsClient(transport: transport, cache: cache)
                 .deleteDoc(owner: owner, repo: repo, path: docPath, sha: sha, token: token)
+        }
+    }
+
+    func uploadAttachment(name: String, bytes: Data, contentType: String) async {
+        await withToken { token, owner, repo in
+            let entry = try await ReleaseAssetClient(transport: transport).uploadAttachment(
+                owner: owner,
+                repo: repo,
+                name: name,
+                bytes: bytes,
+                contentType: contentType,
+                token: token
+            )
+            if !attachments.contains(where: { $0.id == entry.id }) {
+                attachments.insert(entry, at: 0)
+            }
+        }
+    }
+
+    /// Downloads attachment bytes to a temp file for QuickLook / share.
+    func materializeAttachment(_ entry: AttachmentEntry) async -> URL? {
+        guard let token = try? tokens.loadAccessToken() else {
+            writeError = "로그인이 만료되었습니다. 다시 로그인해 주세요."
+            return nil
+        }
+        do {
+            let data = try await ReleaseAssetClient(transport: transport)
+                .downloadBytes(asset: entry, token: token)
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("crewrp-attachments", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent(entry.name)
+            try data.write(to: url, options: .atomic)
+            writeError = nil
+            return url
+        } catch {
+            writeError = writeFailureMessage(String(describing: error))
+            return nil
         }
     }
 
@@ -917,29 +966,77 @@ private struct TaskFormSheet: View {
     }
 }
 
+private func libraryIcon(for item: DocsLibraryItem) -> String {
+    switch item {
+    case .doc(let e):
+        return e.isDir ? "folder.fill" : "doc.text"
+    case .attachment(let e):
+        let n = e.name.lowercased()
+        if n.hasSuffix(".pdf") { return "doc.richtext" }
+        if e.isPreviewable { return "photo" }
+        return "paperclip"
+    }
+}
+
+private func mimeType(forFileName name: String) -> String {
+    switch name.lowercased().split(separator: ".").last.map(String.init) {
+    case "png": return "image/png"
+    case "jpg", "jpeg": return "image/jpeg"
+    case "gif": return "image/gif"
+    case "webp": return "image/webp"
+    case "heic": return "image/heic"
+    case "pdf": return "application/pdf"
+    case "txt": return "text/plain"
+    case "md": return "text/markdown"
+    default: return "application/octet-stream"
+    }
+}
+
 private struct DocsTab: View {
     @ObservedObject var model: AppModel
     @State private var composing = false
     @State private var showingDetail = false
+    @State private var showAddMenu = false
+    @State private var pickingFile = false
+    @State private var previewURL: URL?
+    @State private var shareURL: URL?
     @State private var search = ""
     @FocusState private var searchFocused: Bool
 
-    private var listed: [DocEntry] {
-        listedDocs(folderEntries: model.docs, treeEntries: model.docsTree, query: search)
+    private var listed: [DocsLibraryItem] {
+        listedLibrary(
+            folderEntries: model.docs,
+            treeEntries: model.docsTree,
+            attachments: model.attachments,
+            docsDirPath: model.docsDirPath,
+            query: search
+        )
     }
     private var parentPath: String? { parentDocsPath(model.docsDirPath) }
+    private var libraryEmpty: Bool { model.docs.isEmpty && model.attachments.isEmpty }
 
     private func dismissSearch() {
         searchFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
+    private func openAttachment(_ entry: AttachmentEntry) {
+        Task {
+            guard let url = await model.materializeAttachment(entry) else { return }
+            if entry.isPreviewable {
+                previewURL = url
+            } else {
+                shareURL = url
+            }
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Group {
-                if model.isLoading && model.docs.isEmpty && !model.docFailed {
+                if model.isLoading && libraryEmpty && !model.docFailed {
                     ProgressView()
-                } else if model.docFailed && model.docs.isEmpty {
+                } else if model.docFailed && libraryEmpty {
                     FailedHint { await model.refreshHomeData(forceNetwork: true) }
                 } else {
                     VStack(spacing: 0) {
@@ -954,23 +1051,28 @@ private struct DocsTab: View {
                         Group {
                             if listed.isEmpty {
                                 EmptyHint(
-                                    title: model.docs.isEmpty ? "자료실이 비어 있습니다" : "검색 결과가 없습니다",
-                                    message: model.docs.isEmpty ? "+ 로 자료를 추가하세요." : "다른 검색어를 입력해 보세요."
+                                    title: libraryEmpty ? "자료실이 비어 있습니다" : "검색 결과가 없습니다",
+                                    message: libraryEmpty ? "+ 로 문서·첨부를 추가하세요." : "다른 검색어를 입력해 보세요."
                                 )
                             } else {
-                                List(listed, id: \.path) { entry in
+                                List(listed) { item in
                                     Button {
                                         dismissSearch()
-                                        if entry.isDir {
-                                            Task { await model.listDocs(at: entry.path) }
-                                        } else {
-                                            Task {
-                                                await model.openDoc(path: entry.path)
-                                                showingDetail = true
+                                        switch item {
+                                        case .doc(let entry):
+                                            if entry.isDir {
+                                                Task { await model.listDocs(at: entry.path) }
+                                            } else {
+                                                Task {
+                                                    await model.openDoc(path: entry.path)
+                                                    showingDetail = true
+                                                }
                                             }
+                                        case .attachment(let entry):
+                                            openAttachment(entry)
                                         }
                                     } label: {
-                                        Label(entry.name, systemImage: entry.isDir ? "folder.fill" : "doc.text")
+                                        Label(item.name, systemImage: libraryIcon(for: item))
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     }
                                 }
@@ -1007,13 +1109,47 @@ private struct DocsTab: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         dismissSearch()
-                        composing = true
+                        showAddMenu = true
                     } label: { Image(systemName: "plus") }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
                     Button("완료") { dismissSearch() }
                 }
+            }
+            .confirmationDialog("추가", isPresented: $showAddMenu, titleVisibility: .visible) {
+                Button("문서 작성") { composing = true }
+                Button("파일 첨부") { pickingFile = true }
+                Button("취소", role: .cancel) {}
+            }
+            .fileImporter(isPresented: $pickingFile, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    Task {
+                        let accessed = url.startAccessingSecurityScopedResource()
+                        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                        do {
+                            let data = try Data(contentsOf: url)
+                            await model.uploadAttachment(
+                                name: url.lastPathComponent,
+                                bytes: data,
+                                contentType: mimeType(forFileName: url.lastPathComponent)
+                            )
+                        } catch {
+                            model.writeError = "파일을 읽지 못했습니다."
+                        }
+                    }
+                case .failure:
+                    model.writeError = "파일을 선택하지 못했습니다."
+                }
+            }
+            .quickLookPreview($previewURL)
+            .sheet(item: Binding(
+                get: { shareURL.map { IdentifiedURL(url: $0) } },
+                set: { shareURL = $0?.url }
+            )) { item in
+                ShareSheet(items: [item.url])
             }
             .refreshable { await model.refreshHomeData(forceNetwork: true) }
             .sheet(isPresented: $composing) {
@@ -1031,6 +1167,21 @@ private struct DocsTab: View {
             }
         }
     }
+}
+
+private struct IdentifiedURL: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+private struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 private struct DocDetailSheet: View {

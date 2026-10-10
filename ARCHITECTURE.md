@@ -43,8 +43,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | 투표 참여 | 투표 | Discussion poll | 기존 poll 조회와 `addDiscussionPollVote`. 앱에서 poll 생성은 하지 않는다 |
 | 할 일 | 할 일 | Projects (v2), Issues | GraphQL. 상태 필드 값으로 접수 → 진행 중 → 완료 |
 | 행정 서식 | 서식 | Issue Forms YAML, Issues | 앱이 `.github/ISSUE_TEMPLATE` YAML을 읽어 네이티브 폼을 그린 뒤 Issue를 생성 |
-| 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` | 폴더 목록·본문은 REST Contents. 검색 인덱스는 Git Trees `recursive=1`(경로 `docs/` 필터). 마크다운은 앱이 렌더 |
-| 첨부 파일 | 첨부 | Releases Assets | REST. 파일당 100MB 이상 2GB 이하. 본문에는 asset URL만 삽입 |
+| 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` + Releases Assets | **문서**는 `docs/**/*.md`(필요 시 `.txt`) — Contents 목록·본문, Trees 검색, 인앱 마크다운 렌더/편집. **첨부**(이미지·PDF·기타)는 `crewrp-attachments` Release Assets — 업로드·목록·다운로드. 탭 시 미리보기 가능하면 View(QuickLook/Intent), 아니면 Share/Download. 본문에 넣을 때도 asset URL만. 범용 바이너리를 Contents에 올리지 않는다 |
 | 정기 과업 | 자동 업무 | Actions | `workflow_dispatch` 또는 cron. private repository 포함 분(分) 안에서만 |
 | 소통 | 소통 / 바로 대화 | `.crewrp/settings.json` + Discord | 탭 선택 시 크루 설정의 서버·채널로 딥링크(미연동이면 OAuth). Issue 댓글 UI 아님 |
 | 알림 | 알림 | Webhook | Phase 3. Webhook → Cloudflare Worker → FCM |

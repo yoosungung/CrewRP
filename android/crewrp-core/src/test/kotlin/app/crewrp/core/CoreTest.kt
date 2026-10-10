@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.time.Instant
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -1026,5 +1027,99 @@ class ShellPresentationTest {
         assertEquals("개인", cards.single().title)
         assertEquals(3, cards.single().issueNumber)
         assertTrue(calls >= 2)
+    }
+
+    private val sampleAssetJson =
+        """{"id":42,"name":"shot.png","content_type":"image/png","size":12,""" +
+            """"browser_download_url":"https://github.com/crew/box/releases/download/crewrp-attachments/shot.png",""" +
+            """"url":"https://api.github.com/repos/crew/box/releases/assets/42"}"""
+
+    @Test
+    fun releaseAssetListAssetsParses() {
+        val transport = HttpTransport { _, url, _, _ ->
+            assertTrue(url.endsWith("/releases/9/assets"))
+            HttpResult(200, "[$sampleAssetJson]")
+        }
+        val items = ReleaseAssetClient(transport).listAssets("crew", "box", 9, "t")
+        assertEquals(1, items.size)
+        assertEquals(42, items[0].id)
+        assertEquals("shot.png", items[0].name)
+        assertTrue(items[0].isPreviewable)
+    }
+
+    @Test
+    fun releaseAssetUploadPostsRawBytes() {
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47)
+        var capturedUrl: String? = null
+        var capturedBody: ByteArray? = null
+        val binary = BinaryHttpExchange { method, url, headers, body ->
+            assertEquals("POST", method)
+            capturedUrl = url
+            capturedBody = body
+            assertEquals("image/png", headers["Content-Type"])
+            HttpResult(201, sampleAssetJson)
+        }
+        val item = ReleaseAssetClient(HttpTransport { _, _, _, _ -> error("unused") }, binary = binary)
+            .upload("crew", "box", 9, "shot.png", png, "image/png", "t")
+        assertTrue(capturedUrl!!.contains("uploads.github.com"))
+        assertTrue(capturedUrl!!.contains("/releases/9/assets"))
+        assertTrue(capturedUrl!!.contains("name=shot.png"))
+        assertContentEquals(png, capturedBody)
+        assertEquals(42, item.id)
+    }
+
+    @Test
+    fun releaseAssetDownloadUsesOctetStream() {
+        val blob = byteArrayOf(1, 2, 3)
+        val binary = BinaryHttpExchange { method, url, headers, _ ->
+            assertEquals("GET", method)
+            assertTrue(url.contains("/releases/assets/42"))
+            assertEquals("application/octet-stream", headers["Accept"])
+            HttpResult(200, "", bodyBytes = blob)
+        }
+        val asset = AttachmentEntry(
+            42,
+            "shot.png",
+            "image/png",
+            3,
+            "https://example.com/shot.png",
+            "https://api.github.com/repos/crew/box/releases/assets/42",
+        )
+        val data = ReleaseAssetClient(HttpTransport { _, _, _, _ -> error("unused") }, binary = binary)
+            .downloadBytes(asset, "t")
+        assertContentEquals(blob, data)
+    }
+
+    @Test
+    fun listedLibraryAppendsAttachmentsAtRootAndSearch() {
+        val folder = listOf(DocEntry("docs/a.md", "a.md", null, false))
+        val att = AttachmentEntry(
+            1,
+            "b.pdf",
+            "application/pdf",
+            10,
+            "https://example.com/b.pdf",
+            "https://api.github.com/assets/1",
+        )
+        assertEquals(
+            listOf("a.md", "b.pdf"),
+            listedLibrary(folder, folder, listOf(att), "docs", "").map { it.name },
+        )
+        assertEquals(
+            listOf("a.md"),
+            listedLibrary(folder, folder, listOf(att), "docs/guides", "").map { it.name },
+        )
+        assertEquals(
+            listOf("b.pdf"),
+            listedLibrary(folder, folder, listOf(att), "docs/guides", "b.pdf").map { it.name },
+        )
+    }
+
+    @Test
+    fun attachmentIsPreviewableCoversImageAndPdf() {
+        assertTrue(attachmentIsPreviewable("x.PNG", null))
+        assertTrue(attachmentIsPreviewable("x.pdf", null))
+        assertTrue(attachmentIsPreviewable("x.bin", "image/jpeg"))
+        assertFalse(attachmentIsPreviewable("x.zip", "application/zip"))
     }
 }

@@ -1,5 +1,6 @@
 package app.crewrp
 
+import app.crewrp.core.AttachmentEntry
 import app.crewrp.core.CacheStore
 import app.crewrp.core.DiscussionSetup
 import app.crewrp.core.DiscussionsClient
@@ -11,6 +12,7 @@ import app.crewrp.core.GraphQLFreshness
 import app.crewrp.core.Notice
 import app.crewrp.core.ProjectFieldMeta
 import app.crewrp.core.ProjectsClient
+import app.crewrp.core.ReleaseAssetClient
 import app.crewrp.core.Session
 import app.crewrp.core.TaskCard
 import app.crewrp.core.UrlHttpTransport
@@ -27,6 +29,7 @@ data class CrewContent(
     val docs: List<DocEntry> = emptyList(),
     val docsTree: List<DocEntry> = emptyList(),
     val docsDirPath: String = "docs",
+    val attachments: List<AttachmentEntry> = emptyList(),
     val docPath: String = "docs/README.md",
     val doc: String = "",
     val docSha: String? = null,
@@ -57,7 +60,7 @@ fun fetchCrewContent(
         docFailed = true,
     )
     val transport = UrlHttpTransport()
-    val pool = Executors.newFixedThreadPool(4)
+    val pool = Executors.newFixedThreadPool(5)
     try {
         val loginF: Future<String?> = pool.submit(
             Callable {
@@ -108,6 +111,13 @@ fun fetchCrewContent(
                 )
             },
         )
+        val attachmentsF: Future<List<AttachmentEntry>> = pool.submit(
+            Callable {
+                runCatching {
+                    ReleaseAssetClient(transport).listAttachments(owner, repo, token)
+                }.getOrDefault(emptyList())
+            },
+        )
 
         val tasks = tasksF.get()
         val notices = noticesF.get()
@@ -120,6 +130,7 @@ fun fetchCrewContent(
             docs = docs.entries,
             docsTree = docs.tree,
             docsDirPath = docs.dirPath,
+            attachments = attachmentsF.get(),
             docFailed = docs.failed,
             projectMeta = tasks.third,
             discussionSetup = notices.third,
@@ -205,4 +216,10 @@ class CrewWriter(
 
     fun listDocs(path: String): List<DocEntry> =
         DocsClient(transport, cache).listDocs(owner, repo, token, path)
+
+    fun uploadAttachment(name: String, bytes: ByteArray, contentType: String): AttachmentEntry =
+        ReleaseAssetClient(transport).uploadAttachment(owner, repo, name, bytes, contentType, token)
+
+    fun downloadAttachment(asset: AttachmentEntry): ByteArray =
+        ReleaseAssetClient(transport).downloadBytes(asset, token)
 }

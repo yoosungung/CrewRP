@@ -1,5 +1,6 @@
 package app.crewrp
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -14,8 +15,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.core.content.FileProvider
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import java.io.File
 import app.crewrp.core.AccountLink
 import app.crewrp.core.AuthBridgeClient
 import app.crewrp.core.AuthConfig
@@ -324,6 +327,45 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 },
+                                onUploadAttachment = { name, bytes, contentType ->
+                                    runWrite {
+                                        val entry = it.uploadAttachment(name, bytes, contentType)
+                                        runOnUiThread {
+                                            val next = listOf(entry) + content.attachments.filter { a -> a.id != entry.id }
+                                            content = content.copy(attachments = next, writeError = null)
+                                        }
+                                    }
+                                },
+                                onOpenAttachment = { asset ->
+                                    runWrite(refresh = false) { writer ->
+                                        val bytes = writer.downloadAttachment(asset)
+                                        val dir = File(cacheDir, "crewrp-attachments").also { it.mkdirs() }
+                                        val file = File(dir, asset.name)
+                                        file.writeBytes(bytes)
+                                        val uri = FileProvider.getUriForFile(
+                                            this,
+                                            "${packageName}.fileprovider",
+                                            file,
+                                        )
+                                        val mime = asset.contentType ?: mimeGuess(asset.name)
+                                        runOnUiThread {
+                                            val view = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(uri, mime)
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            val share = Intent(Intent.ACTION_SEND).apply {
+                                                type = mime
+                                                putExtra(Intent.EXTRA_STREAM, uri)
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            try {
+                                                startActivity(Intent.createChooser(view, asset.name))
+                                            } catch (_: ActivityNotFoundException) {
+                                                startActivity(Intent.createChooser(share, asset.name))
+                                            }
+                                        }
+                                    }
+                                },
                             ),
                             onRefresh = { refreshTick += 1 },
                             onLinkDiscord = {
@@ -480,6 +522,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+private fun mimeGuess(name: String): String =
+    when (name.substringAfterLast('.', "").lowercase()) {
+        "png" -> "image/png"
+        "jpg", "jpeg" -> "image/jpeg"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "pdf" -> "application/pdf"
+        else -> "application/octet-stream"
+    }
 
 private fun registerDeviceToken(baseUrl: String, userId: String, token: String) {
     val connection = (URL(baseUrl.trimEnd('/') + "/devices").openConnection() as HttpURLConnection).apply {

@@ -14,13 +14,23 @@ data class HttpResult(
     val status: Int,
     val body: String,
     val headers: Map<String, String> = emptyMap(),
+    val bodyBytes: ByteArray = ByteArray(0),
 ) {
     fun header(name: String): String? =
         headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
 }
 
 class UrlHttpTransport : HttpTransport {
-    override fun exchange(method: String, url: String, headers: Map<String, String>, body: String?): HttpResult {
+    override fun exchange(method: String, url: String, headers: Map<String, String>, body: String?): HttpResult =
+        exchangeBytes(method, url, headers, body?.toByteArray(Charsets.UTF_8))
+
+    /** Raw body (Release Assets upload/download). */
+    fun exchangeBytes(
+        method: String,
+        url: String,
+        headers: Map<String, String>,
+        body: ByteArray?,
+    ): HttpResult {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             // JVM HttpURLConnection rejects PATCH; GitHub honors X-HTTP-Method-Override.
             if (method.equals("PATCH", ignoreCase = true)) {
@@ -33,18 +43,18 @@ class UrlHttpTransport : HttpTransport {
             headers.forEach { (k, v) -> setRequestProperty(k, v) }
             if (body != null) {
                 doOutput = true
-                outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                outputStream.use { it.write(body) }
             }
         }
         val status = connection.responseCode
         val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-        val text = stream?.bufferedReader()?.readText().orEmpty()
+        val bytes = stream?.readBytes() ?: ByteArray(0)
         val responseHeaders = buildMap {
             connection.headerFields?.forEach { (key, values) ->
                 if (key != null) put(key, values?.firstOrNull().orEmpty())
             }
         }
-        return HttpResult(status, text, responseHeaders)
+        return HttpResult(status, String(bytes, Charsets.UTF_8), responseHeaders, bytes)
     }
 }
 

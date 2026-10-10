@@ -155,6 +155,29 @@ fun listedDocs(folderEntries: List<DocEntry>, treeEntries: List<DocEntry>, query
     return if (q.isEmpty()) filterDocs(folderEntries, "") else filterDocs(treeEntries, q)
 }
 
+fun filterAttachments(entries: List<AttachmentEntry>, query: String): List<AttachmentEntry> {
+    val q = query.trim()
+    val filtered = if (q.isEmpty()) entries else entries.filter { it.name.contains(q, ignoreCase = true) }
+    return filtered.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+}
+
+/** docs 폴더 + (루트이거나 검색 중) Release 첨부. */
+fun listedLibrary(
+    folderEntries: List<DocEntry>,
+    treeEntries: List<DocEntry>,
+    attachments: List<AttachmentEntry>,
+    docsDirPath: String,
+    query: String,
+): List<DocsLibraryItem> {
+    val q = query.trim()
+    val docs = listedDocs(folderEntries, treeEntries, query).map { DocsLibraryItem.Doc(it) }
+    val atRoot = docsDirPath.trim('/') == "docs"
+    val showAttachments = atRoot || q.isNotEmpty()
+    if (!showAttachments) return docs
+    val atts = filterAttachments(attachments, query).map { DocsLibraryItem.Attachment(it) }
+    return docs + atts
+}
+
 /** `/docs` 루트면 null. 그 외 상위 path (Contents API list 대상). */
 fun parentDocsPath(path: String): String? {
     val trimmed = path.trim('/').trimEnd('/')

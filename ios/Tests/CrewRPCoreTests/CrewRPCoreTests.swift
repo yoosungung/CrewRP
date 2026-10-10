@@ -811,3 +811,127 @@ struct PendingLoginStoreTests {
         #expect(try store.load() == nil)
     }
 }
+
+@Suite("ReleaseAssetClient")
+struct ReleaseAssetClientTests {
+    @Test("listAssets parses release assets")
+    func listAssets() async throws {
+        let assetJSON = """
+        {"id":42,"name":"shot.png","content_type":"image/png","size":12,\
+        "browser_download_url":"https://github.com/crew/box/releases/download/crewrp-attachments/shot.png",\
+        "url":"https://api.github.com/repos/crew/box/releases/assets/42"}
+        """
+        let transport = MockHTTPTransport()
+        transport.handler = { request in
+            #expect(request.url!.path.hasSuffix("/releases/9/assets"))
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer t")
+            let body = Data("[\(assetJSON)]".utf8)
+            return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let items = try await ReleaseAssetClient(transport: transport)
+            .listAssets(owner: "crew", repo: "box", releaseId: 9, token: "t")
+        #expect(items.count == 1)
+        #expect(items[0].id == 42)
+        #expect(items[0].name == "shot.png")
+        #expect(items[0].isPreviewable)
+    }
+
+    @Test("upload posts raw bytes to uploads.github.com")
+    func upload() async throws {
+        let assetJSON = """
+        {"id":42,"name":"shot.png","content_type":"image/png","size":12,\
+        "browser_download_url":"https://github.com/crew/box/releases/download/crewrp-attachments/shot.png",\
+        "url":"https://api.github.com/repos/crew/box/releases/assets/42"}
+        """
+        let transport = MockHTTPTransport()
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        transport.handler = { request in
+            #expect(request.url!.host == "uploads.github.com")
+            #expect(request.url!.path.hasSuffix("/releases/9/assets"))
+            #expect(request.url!.query!.contains("name=shot.png"))
+            #expect(request.httpMethod == "POST")
+            #expect(request.value(forHTTPHeaderField: "Content-Type") == "image/png")
+            #expect(request.httpBody == png)
+            let body = Data(assetJSON.utf8)
+            return (body, HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!)
+        }
+        let item = try await ReleaseAssetClient(transport: transport).upload(
+            owner: "crew",
+            repo: "box",
+            releaseId: 9,
+            name: "shot.png",
+            bytes: png,
+            contentType: "image/png",
+            token: "t"
+        )
+        #expect(item.id == 42)
+        #expect(item.size == 12)
+    }
+
+    @Test("downloadBytes uses octet-stream accept")
+    func download() async throws {
+        let transport = MockHTTPTransport()
+        let blob = Data([1, 2, 3])
+        transport.handler = { request in
+            #expect(request.url!.absoluteString.contains("/releases/assets/42"))
+            #expect(request.value(forHTTPHeaderField: "Accept") == "application/octet-stream")
+            return (blob, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let asset = AttachmentEntry(
+            id: 42,
+            name: "shot.png",
+            contentType: "image/png",
+            size: 3,
+            browserDownloadURL: URL(string: "https://example.com/shot.png")!,
+            apiURL: URL(string: "https://api.github.com/repos/crew/box/releases/assets/42")!
+        )
+        let data = try await ReleaseAssetClient(transport: transport).downloadBytes(asset: asset, token: "t")
+        #expect(data == blob)
+    }
+
+    @Test("listedLibrary appends attachments at docs root and when searching")
+    func listedLibraryMerge() {
+        let folder = [DocEntry(path: "docs/a.md", name: "a.md", sha: nil, isDir: false)]
+        let tree = folder
+        let att = AttachmentEntry(
+            id: 1,
+            name: "b.pdf",
+            contentType: "application/pdf",
+            size: 10,
+            browserDownloadURL: URL(string: "https://example.com/b.pdf")!,
+            apiURL: URL(string: "https://api.github.com/assets/1")!
+        )
+        let root = listedLibrary(
+            folderEntries: folder,
+            treeEntries: tree,
+            attachments: [att],
+            docsDirPath: "docs",
+            query: ""
+        )
+        #expect(root.map(\.name) == ["a.md", "b.pdf"])
+        let nested = listedLibrary(
+            folderEntries: folder,
+            treeEntries: tree,
+            attachments: [att],
+            docsDirPath: "docs/guides",
+            query: ""
+        )
+        #expect(nested.map(\.name) == ["a.md"])
+        let search = listedLibrary(
+            folderEntries: folder,
+            treeEntries: tree,
+            attachments: [att],
+            docsDirPath: "docs/guides",
+            query: "b.pdf"
+        )
+        #expect(search.map(\.name) == ["b.pdf"])
+    }
+
+    @Test("attachmentIsPreviewable covers image and pdf")
+    func previewable() {
+        #expect(attachmentIsPreviewable(name: "x.PNG", contentType: nil))
+        #expect(attachmentIsPreviewable(name: "x.pdf", contentType: nil))
+        #expect(attachmentIsPreviewable(name: "x.bin", contentType: "image/jpeg"))
+        #expect(!attachmentIsPreviewable(name: "x.zip", contentType: "application/zip"))
+    }
+}

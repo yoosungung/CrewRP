@@ -225,6 +225,35 @@ public func listedDocs(folderEntries: [DocEntry], treeEntries: [DocEntry], query
     return filterDocs(treeEntries, query: q)
 }
 
+public func filterAttachments(_ entries: [AttachmentEntry], query: String) -> [AttachmentEntry] {
+    let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let filtered: [AttachmentEntry]
+    if q.isEmpty {
+        filtered = entries
+    } else {
+        filtered = entries.filter { $0.name.range(of: q, options: .caseInsensitive) != nil }
+    }
+    return filtered.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+}
+
+/// docs 폴더 항목 + (docs 루트이거나 검색 중일 때) Release 첨부를 합친 자료실 목록.
+public func listedLibrary(
+    folderEntries: [DocEntry],
+    treeEntries: [DocEntry],
+    attachments: [AttachmentEntry],
+    docsDirPath: String,
+    query: String
+) -> [DocsLibraryItem] {
+    let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let docs = listedDocs(folderEntries: folderEntries, treeEntries: treeEntries, query: query)
+        .map { DocsLibraryItem.doc($0) }
+    let atRoot = docsDirPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "docs"
+    let showAttachments = atRoot || !q.isEmpty
+    guard showAttachments else { return docs }
+    let atts = filterAttachments(attachments, query: query).map { DocsLibraryItem.attachment($0) }
+    return docs + atts
+}
+
 /// `/docs` 루트면 nil. 그 외 상위 path (Contents API list 대상).
 public func parentDocsPath(_ path: String) -> String? {
     var trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))

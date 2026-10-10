@@ -43,6 +43,11 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -78,6 +83,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
@@ -90,14 +96,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.crewrp.CrewContent
 import app.crewrp.core.AccountLink
+import app.crewrp.core.AttachmentEntry
 import app.crewrp.core.CrewRepo
 import app.crewrp.core.DocBlock
 import app.crewrp.core.DocEntry
+import app.crewrp.core.DocsLibraryItem
 import app.crewrp.core.Notice
 import app.crewrp.core.Session
 import app.crewrp.core.TaskCard
 import app.crewrp.core.TaskLane
 import app.crewrp.core.TeamRole
+import android.provider.OpenableColumns
 import app.crewrp.core.canMutate
 import app.crewrp.core.crewDisplayName
 import app.crewrp.core.crewOwnerName
@@ -107,7 +116,7 @@ import app.crewrp.core.formatDue
 import app.crewrp.core.formatDueOnDate
 import app.crewrp.core.homeSections
 import app.crewrp.core.kanbanUsesStackedLanes
-import app.crewrp.core.listedDocs
+import app.crewrp.core.listedLibrary
 import app.crewrp.core.parentDocsPath
 import app.crewrp.core.parseDueOnDate
 import app.crewrp.core.roleLabel
@@ -116,6 +125,32 @@ import app.crewrp.core.taskStatusChoice
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+
+private fun mimeTypeForFileName(name: String): String =
+    when (name.substringAfterLast('.', "").lowercase()) {
+        "png" -> "image/png"
+        "jpg", "jpeg" -> "image/jpeg"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "heic" -> "image/heic"
+        "pdf" -> "application/pdf"
+        "txt" -> "text/plain"
+        "md" -> "text/markdown"
+        else -> "application/octet-stream"
+    }
+
+private fun libraryIcon(item: DocsLibraryItem): ImageVector =
+    when (item) {
+        is DocsLibraryItem.Doc -> if (item.entry.isDir) Icons.Filled.Folder else Icons.Filled.Description
+        is DocsLibraryItem.Attachment -> {
+            val n = item.entry.name.lowercase()
+            when {
+                n.endsWith(".pdf") -> Icons.Filled.Description
+                item.entry.isPreviewable -> Icons.Filled.Image
+                else -> Icons.Filled.AttachFile
+            }
+        }
+    }
 
 data class CrewActions(
     val onCreateNotice: (title: String, body: String) -> Unit,
@@ -128,6 +163,8 @@ data class CrewActions(
     val onDeleteDoc: () -> Unit,
     val onOpenDoc: (path: String) -> Unit,
     val onListDocs: (path: String) -> Unit,
+    val onUploadAttachment: (name: String, bytes: ByteArray, contentType: String) -> Unit,
+    val onOpenAttachment: (AttachmentEntry) -> Unit,
 )
 
 private data class Destination(val label: String, val selectedIcon: ImageVector, val icon: ImageVector)
@@ -239,6 +276,19 @@ fun CrewShell(
     var editingNotice by remember { mutableStateOf<Notice?>(null) }
     var editingTask by remember { mutableStateOf<TaskCard?>(null) }
     var viewingDoc by remember { mutableStateOf(false) }
+    var docsAddMenu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val pickAttachment = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val resolver = context.contentResolver
+        val name = resolver.query(uri, null, null, null, null)?.use { cursor ->
+            val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (cursor.moveToFirst() && idx >= 0) cursor.getString(idx) else null
+        } ?: uri.lastPathSegment ?: "attachment.bin"
+        val mime = resolver.getType(uri) ?: mimeTypeForFileName(name)
+        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: return@rememberLauncherForActivityResult
+        actions.onUploadAttachment(name, bytes, mime)
+    }
     val name = crewDisplayName(session.repo)
 
     LaunchedEffect(tab) {
@@ -269,13 +319,33 @@ fun CrewShell(
         },
         floatingActionButton = {
             when (tab) {
-                0, 1, 2 -> FloatingActionButton(onClick = {
+                0, 1 -> FloatingActionButton(onClick = {
                     compose = when (tab) {
                         0 -> ComposeKind.Notice
-                        1 -> ComposeKind.Task
-                        else -> ComposeKind.Doc
+                        else -> ComposeKind.Task
                     }
                 }) { Icon(Icons.Filled.Add, contentDescription = "작성") }
+                2 -> Box {
+                    FloatingActionButton(onClick = { docsAddMenu = true }) {
+                        Icon(Icons.Filled.Add, contentDescription = "추가")
+                    }
+                    DropdownMenu(expanded = docsAddMenu, onDismissRequest = { docsAddMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("문서 작성") },
+                            onClick = {
+                                docsAddMenu = false
+                                compose = ComposeKind.Doc
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("파일 첨부") },
+                            onClick = {
+                                docsAddMenu = false
+                                pickAttachment.launch(arrayOf("*/*"))
+                            },
+                        )
+                    }
+                }
             }
         },
         bottomBar = {
@@ -701,8 +771,15 @@ private fun DocsTab(
     var search by remember { mutableStateOf("") }
     var searchFocused by remember { mutableStateOf(false) }
     var pendingPath by remember { mutableStateOf<String?>(null) }
-    val listed = listedDocs(content.docs, content.docsTree, search)
+    val listed = listedLibrary(
+        content.docs,
+        content.docsTree,
+        content.attachments,
+        content.docsDirPath,
+        search,
+    )
     val parent = parentDocsPath(content.docsDirPath)
+    val libraryEmpty = content.docs.isEmpty() && content.attachments.isEmpty()
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     fun dismissSearch() {
@@ -718,8 +795,8 @@ private fun DocsTab(
         }
     }
     when {
-        content.loading && content.docs.isEmpty() && !content.docFailed -> LoadingPane(modifier)
-        content.docFailed && content.docs.isEmpty() -> FailedPane(modifier, onRetry)
+        content.loading && libraryEmpty && !content.docFailed -> LoadingPane(modifier)
+        content.docFailed && libraryEmpty -> FailedPane(modifier, onRetry)
         else -> Column(modifier.fillMaxSize()) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -750,24 +827,30 @@ private fun DocsTab(
                 if (listed.isEmpty()) {
                     EmptyPane(
                         Modifier.fillMaxSize(),
-                        if (content.docs.isEmpty()) "자료실이 비어 있습니다" else "검색 결과가 없습니다",
-                        if (content.docs.isEmpty()) "+ 로 자료를 추가하세요." else "다른 검색어를 입력해 보세요.",
+                        if (libraryEmpty) "자료실이 비어 있습니다" else "검색 결과가 없습니다",
+                        if (libraryEmpty) "+ 로 문서·첨부를 추가하세요." else "다른 검색어를 입력해 보세요.",
                     )
                 } else {
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                     ) {
-                        items(listed, key = { it.path }) { entry ->
-                            DocRow(
-                                entry = entry,
+                        items(listed, key = { it.key }) { item ->
+                            LibraryRow(
+                                item = item,
                                 onClick = {
                                     dismissSearch()
-                                    if (entry.isDir) {
-                                        actions.onListDocs(entry.path)
-                                    } else {
-                                        pendingPath = entry.path
-                                        actions.onOpenDoc(entry.path)
+                                    when (item) {
+                                        is DocsLibraryItem.Doc -> {
+                                            val entry = item.entry
+                                            if (entry.isDir) {
+                                                actions.onListDocs(entry.path)
+                                            } else {
+                                                pendingPath = entry.path
+                                                actions.onOpenDoc(entry.path)
+                                            }
+                                        }
+                                        is DocsLibraryItem.Attachment -> actions.onOpenAttachment(item.entry)
                                     }
                                 },
                             )
@@ -791,7 +874,7 @@ private fun DocsTab(
 }
 
 @Composable
-private fun DocRow(entry: DocEntry, onClick: () -> Unit) {
+private fun LibraryRow(item: DocsLibraryItem, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -801,11 +884,11 @@ private fun DocRow(entry: DocEntry, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Icon(
-            if (entry.isDir) Icons.Filled.Folder else Icons.Filled.Description,
+            libraryIcon(item),
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
         )
-        Text(entry.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(item.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
