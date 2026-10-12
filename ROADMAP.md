@@ -46,7 +46,7 @@
 - [x] 홈: repo `README.md` Contents 렌더, 고정 공지 섹션·홈 공지 작성 제거
 - [x] 소통: Discord 상단 + Discussions 카테고리 → 글 CRUD (탭 자동 딥링크 제거)
 - [x] `listCategories` / 카테고리별 `listDiscussions` 코어·테스트
-- [ ] 홈 README·소통 카테고리 글 수동 E2E
+- [x] 홈 README·소통 카테고리 글 수동 E2E
 - 완료 기준: 홈에서 README, 소통에서 바로 대화·카테고리 글 작성·열람 수동 확인
 
 ## Phase 6 — 할 일·게시판 댓글
