@@ -38,7 +38,7 @@
 - [x] `auth-bridge` Discord 코드 교환 + `@me` (`POST /oauth/discord/token`)
 - [x] 기기 `account_link`(discord) 저장·해제, 로그아웃 시 삭제
 - [x] 소통 탭: Discord 연결 / 바로 대화(딥링크) / 연결 해제 (Issue 말풍선 본체 제거)
-- [ ] Discord OAuth App·서버/채널 ID 실키 투입 후 수동 E2E (`DISCORD_CLIENT_*` Worker 시크릿 + 앱 `DiscordClientID`/`DISCORD_CLIENT_ID`)
+- [x] Discord OAuth App·서버/채널 ID 실키 투입 후 수동 E2E (`DISCORD_CLIENT_*` Worker 시크릿 + 앱 `DiscordClientID`/`DISCORD_CLIENT_ID`)
 - 완료 기준: GitHub 로그인 후 Discord 연동 → 소통에서 딥링크 진입, 해제·로그아웃 시 연동 기록 없음
 
 ## Phase 5 — 소통 허브 + 홈 README
@@ -46,7 +46,7 @@
 - [x] 홈: repo `README.md` Contents 렌더, 고정 공지 섹션·홈 공지 작성 제거
 - [x] 소통: Discord 상단 + Discussions 카테고리 → 글 CRUD (탭 자동 딥링크 제거)
 - [x] `listCategories` / 카테고리별 `listDiscussions` 코어·테스트
-- [ ] 홈 README·소통 카테고리 글 수동 E2E
+- [x] 홈 README·소통 카테고리 글 수동 E2E
 - 완료 기준: 홈에서 README, 소통에서 바로 대화·카테고리 글 작성·열람 수동 확인
 
 ## Phase 6 — 할 일·게시판 댓글
