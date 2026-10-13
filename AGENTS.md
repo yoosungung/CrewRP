@@ -2,7 +2,7 @@
  
 This file provides guidance to AI coding assistants (Claude Code, Codex, Gemini, ...) when working with code in this repository. `CLAUDE.md`와 `GEMINI.md`는 이 파일로의 심볼릭 링크다 — 정본은 `AGENTS.md` 하나.
  
-에이전트·기여자가 **무엇을 어디서 읽고 어떻게 실행하는지**만 담는다. 불변 규칙은 [ARCHITECTURE.md](ARCHITECTURE.md), 일정은 [ROADMAP.md](ROADMAP.md).
+에이전트·기여자가 **무엇을 어디서 읽고 어떻게 실행하는지**만 담는다. 불변 규칙은 [ARCHITECTURE.md](ARCHITECTURE.md), 일정은 [ROADMAP.md](ROADMAP.md). 공부(Study) 경험은 [docs/study/PRODUCT.md](docs/study/PRODUCT.md).
  
 ## 1. Documentation layout (문서 용도)
  
@@ -11,7 +11,8 @@ This file provides guidance to AI coding assistants (Claude Code, Codex, Gemini,
 | 파일 | 용도 | 위치 |
 |------|------|------|
 | `AGENTS.md` (이 파일, 정본) ← `CLAUDE.md`, `GEMINI.md` 심볼릭 | 수행 방법 + 문서 레이아웃 + 현황 | 루트 |
-| `ARCHITECTURE.md` | **계약사항(불변 규칙)** + 컴포넌트 *간* 인터페이스 형태(스키마·레이아웃·이벤트) | 루트 |
+| `ARCHITECTURE.md` | **계약사항(불변 규칙)** + 컴포넌트 *간* 인터페이스 형태(스키마·레이아웃·이벤트). 공부 스키마는 §7 | 루트 |
+| `docs/study/PRODUCT.md` | 공부(Study) 제품 경험·말투·화면 | `docs/study/` |
 | `README.md` | 저장소 방문자용 소개 + 로컬 quickstart | 루트 |
 | `SIMULATION.md` | 테스트용 샘플 크루 저장소 안내 (앱에 하드코딩하지 않음) | 루트 |
 | `<comp>/DESIGN.md` | 컴포넌트 *내부* 설계 + `## Commands` (빌드/실행/테스트) | `ios/`, `android/`, `auth-bridge/`, `push-bridge/` |
@@ -27,7 +28,8 @@ This file provides guidance to AI coding assistants (Claude Code, Codex, Gemini,
  
 ## 2. 수행 방법 (How we work in this repo)
  
-- 계획·설계·구현 변경은 해당 문서를 먼저(또는 함께) 고친다: 계획 변경 → `ROADMAP.md`, 설계·규칙 변경 → `ARCHITECTURE.md`(또는 해당 컴포넌트의 `DESIGN.md`), 워크플로 변경 → 이 파일.
+- 계획·설계·구현 변경은 해당 문서를 먼저(또는 함께) 고친다: 계획 변경 → `ROADMAP.md`, 설계·규칙 변경 → `ARCHITECTURE.md`(또는 해당 컴포넌트의 `DESIGN.md`), 공부 경험 변경 → `docs/study/PRODUCT.md`, 워크플로 변경 → 이 파일.
+- **공부(Study) 구현은 이 저장소에서만 한다.** 구 [UniTutorAI](https://github.com/yoosungung/UniTutorAI)는 동결 포인터다. React/Workers 스켈레톤을 키우지 않는다.
 - 코드가 처음 들어오는 컴포넌트는 그 폴더의 `DESIGN.md`를 함께 만들고, 이 파일의 §1 표 또는 `ARCHITECTURE.md` §1 계약사항을 필요 시 갱신한다.
 - 컴포넌트에 첫 코드가 들어오면, 해당 폴더의 `DESIGN.md`에 **`## Commands`** 섹션을 추가해 빌드/실행/테스트 방법을 기록한다. 그 전까지는 비워둔다(존재하지 않는 명령을 만들어 적지 않는다).
 - 개발은 TDD 방식으로 진행한다. (코드 스켈레톤 -> 테스트 코드 -> 기능 구현)
@@ -35,5 +37,5 @@ This file provides guidance to AI coding assistants (Claude Code, Codex, Gemini,
  
 ## 3. Status
  
-Phase 1–3 구현 진행 중. 코어·Worker·앱 셸 있음. OAuth/FCM/Discord 실키 E2E는 설정 후. 계약은 [ARCHITECTURE.md](ARCHITECTURE.md), 순서는 [ROADMAP.md](ROADMAP.md).
+Phase 1–6 그룹웨어 코어·셸 있음(일부 수동 E2E 남음). **Phase 7 공부** S7-01~06(번들 강의·캔버스·WebView·BundledTutor·홈 CTA) 완료. 다음은 S7-07~09(경로·카드·한도). OAuth/FCM/Discord 실키 E2E는 설정 후.
 

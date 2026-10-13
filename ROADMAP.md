@@ -57,7 +57,76 @@
 - [ ] 수동 E2E: 할 일·게시판 글에서 댓글 1회 작성·수정·삭제
 - 완료 기준: issueNumber 있는 할 일·Discussion 글에서 댓글 CRUD 확인
 
+## Phase 7 — 공부 (Study, 구 UniTutor)
+
+경험은 [docs/study/PRODUCT.md](docs/study/PRODUCT.md), 스키마·계약은 [ARCHITECTURE.md](ARCHITECTURE.md) §7. **구현은 이 저장소(CrewRP)만.** [UniTutorAI](https://github.com/yoosungung/UniTutorAI)는 동결.
+
+티켓 상태: `todo` | `doing` | `done`. TDD: 실패 테스트 → 구현 → 통과. 두 클라이언트(iOS/Android) 동일 순서.
+
+### S7-01 · 공개 강의 1개 정적 자산
+
+- **내용**: 자막(VTT)·슬라이드 라벨을 배치 1회로 `CourseRef` + `SourceSpan[]` JSON. 앱 번들 또는 크루 repo에서 로드. 런타임 인덱싱 $0.
+- **완료 조건**: 한 강의의 `id`/`playbackUrl`/`SourceSpan`이 로드된다.
+- **상태**: `done` — 번들 `cs-algo-intro-01`(MIT 6.006 L1). 첫 과목 **CS**.
+
+### S7-02 · 적응형 2분할 공부 캔버스 (네이티브)
+
+- **내용**: 세로 상하 / 가로 좌우. 분할 핸들 스냅 `7:3` · `5:5` · `3:7`. 튜터 UI는 영상 영역을 가리지 않는다.
+- **완료 조건**: 뷰포트 전환·핸들 스냅이 테스트/수동으로 확인되고 PRODUCT §4.3을 만족한다.
+- **상태**: `done` — 코어 비율 테스트 + iOS/Android 캔버스 UI.
+
+### S7-03 · 영상 WebView (YouTube embed, 무저장)
+
+- **내용**: `playbackUrl`을 WebView **최상위**로 로드. `CitationSelected` 시 `startSec`로 seek/재로드. 앱이 영상을 저장하지 않는다.
+- **의존**: S7-02
+- **완료 조건**: 재생·인용 점프가 동작한다.
+- **상태**: `done` — `embedPlaybackURL` + WebView 재로드(`?start=`).
+
+### S7-04 · 네이티브 `TutorTurn` + 저가 추론
+
+- **내용**: 네이티브가 Worker 또는 BYOK로 1질문 튜터 호출. 스키마·`out_of_scope` 준수. 시크릿은 바이너리에 없음.
+- **의존**: S7-01
+- **완료 조건**: `question` 하나·`citations`·`escalationStep`을 받고 정답/풀이 전문이 실리지 않는다(계약 테스트).
+- **상태**: `done` — 1단계는 `BundledTutorClient`(정적 프롬프트, 시크릿 없음). Worker/BYOK는 후속.
+
+### S7-05 · 튜터 대화 UI + 시각 점프
+
+- **내용**: 대화 슬롯(네이티브). 인용 탭 → `CitationSelected`. 속생각 접힌 한 줄.
+- **의존**: S7-03, S7-04
+- **완료 조건**: 질문 → 인용 → 영상 점프가 한 캔버스에서 끝난다.
+- **상태**: `done`
+
+### S7-06 · 홈에서 공부 진입 E2E
+
+- **내용**: 홈 CTA → 고정 강의 1개 캔버스. 장면 보기 + 질문 1개.
+- **의존**: S7-02~S7-05
+- **완료 조건**: 크루 홈에서 공부로 들어가 강의를 보며 질문을 받는다.
+- **상태**: `done` — 홈 「이어서 할 공부」 CTA. 수동 기기 확인은 로그인 후.
+
+### S7-07 · 경로·온보딩·detour (2단계)
+
+- **내용**: 정적 지식 DAG, Advisor 온보딩으로 `skipped`, 막힘 시 `DetourInserted`.
+- **의존**: S7-06
+- **상태**: `todo`
+
+### S7-08 · 세션 종료 + 로컬 `ReviewCard`
+
+- **내용**: `SessionClosed` → SQLite `review_card` 1장. `fadesAt`(1단계는 고정 간격 가능).
+- **의존**: S7-06
+- **상태**: `todo`
+
+### S7-09 · 카드 알림·문답 한도·BYOK (3단계)
+
+- **내용**: `CardFaded` 알림, 하루 문답 한도, BYOK/광고 중 하나.
+- **의존**: S7-08, §미결정
+- **상태**: `todo`
+
+---
+
 ## 미결정
 
 - **투표 생성.** `createDiscussion`에 poll 필드가 없다. 앱에서 투표를 만들 API가 생기기 전에는 만들지 않는다.
 - **본문 이미지 직접 업로드.** `uploads.github.com`은 비공식이다. 공식 REST가 생기기 전에는 Releases Assets URL만 본문에 넣는다.
+- ~~**공부 첫 과목.**~~ → **CS** (`cs-algo-intro-01`, S7-01)
+- **무료 문답 하루 기본 횟수**, 광고 1회당 충전, BYOK 노출 시점 → **S7-09**
+- **다시 보기 알림 하루 상한** → **S7-09**

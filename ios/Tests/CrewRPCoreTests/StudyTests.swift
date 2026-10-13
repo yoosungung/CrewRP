@@ -1,0 +1,135 @@
+import Foundation
+import Testing
+@testable import CrewRPCore
+
+@Suite("Study course asset")
+struct StudyCourseAssetTests {
+    @Test("bundled CS course loads id playbackUrl and spans")
+    func loadsBundledCourse() throws {
+        let asset = try CourseAsset.loadBundled()
+        #expect(asset.course.id == "cs-algo-intro-01")
+        #expect(asset.course.subject == "CS")
+        #expect(asset.course.playbackUrl.contains("youtube.com/embed/"))
+        #expect(!asset.spans.isEmpty)
+        #expect(asset.spans.allSatisfy { $0.courseId == asset.course.id })
+        #expect(asset.spans.first?.startSec ?? -1 >= 0)
+    }
+
+    @Test("parse rejects empty course id")
+    func parseRejectsBad() {
+        #expect(throws: CourseAssetError.self) {
+            try CourseAsset.parse(#"{"course":{"id":"","title":"t","subject":"CS","playbackUrl":"https://x"},"spans":[]}"#)
+        }
+    }
+}
+
+@Suite("Study playback URL")
+struct StudyPlaybackURLTests {
+    @Test("appends start seconds for citation jump")
+    func appendsStart() {
+        let base = "https://www.youtube.com/embed/HtSuA80QTyo"
+        #expect(embedPlaybackURL(base, startSec: 90) == "https://www.youtube.com/embed/HtSuA80QTyo?start=90")
+        #expect(embedPlaybackURL(base + "?rel=0", startSec: 12) == "https://www.youtube.com/embed/HtSuA80QTyo?rel=0&start=12")
+        #expect(embedPlaybackURL(base, startSec: nil) == base)
+        #expect(embedPlaybackURL(base, startSec: 0) == base)
+    }
+}
+
+@Suite("Study split ratio")
+struct StudySplitRatioTests {
+    @Test("weights match product snaps")
+    func weights() {
+        #expect(StudySplitRatio.mediaHeavy.mediaWeight == 7)
+        #expect(StudySplitRatio.mediaHeavy.tutorWeight == 3)
+        #expect(StudySplitRatio.balanced.mediaWeight == 5)
+        #expect(StudySplitRatio.tutorHeavy.mediaWeight == 3)
+    }
+
+    @Test("portrait stacks vertically")
+    func orientation() {
+        #expect(studyCanvasStacksVertically(width: 390, height: 844))
+        #expect(!studyCanvasStacksVertically(width: 844, height: 390))
+    }
+
+    @Test("snaps continuous fraction to nearest ratio")
+    func snap() {
+        #expect(StudySplitRatio.snap(mediaFraction: 0.75) == .mediaHeavy)
+        #expect(StudySplitRatio.snap(mediaFraction: 0.5) == .balanced)
+        #expect(StudySplitRatio.snap(mediaFraction: 0.25) == .tutorHeavy)
+    }
+}
+
+@Suite("TutorTurn contract")
+struct TutorTurnContractTests {
+    @Test("accepts one guiding question with citations")
+    func acceptsValid() throws {
+        let asset = try CourseAsset.loadBundled()
+        let turn = try BundledTutorClient(asset: asset).turn(for: asset.spans[0].id, escalationStep: 1)
+        #expect(TutorContract.isValid(turn))
+        #expect(!turn.question.isEmpty)
+        #expect(turn.escalationStep == 1)
+        #expect(!turn.citations.isEmpty)
+        #expect(turn.scope == .inLecture)
+    }
+
+    @Test("rejects answer dump in question")
+    func rejectsAnswerDump() {
+        let bad = TutorTurn(
+            id: "t1",
+            sourceSpanId: "s1",
+            question: "정답은 42입니다. 풀이: n log n",
+            escalationStep: 1,
+            citations: ["s1"],
+            scope: .inLecture,
+            formulaVerdict: nil
+        )
+        #expect(!TutorContract.isValid(bad))
+    }
+
+    @Test("out_of_scope clears citations")
+    func outOfScope() {
+        let turn = TutorTurn(
+            id: "t2",
+            sourceSpanId: "s1",
+            question: "이 강의 범위 밖입니다. 관련 장면으로 돌아가 보세요.",
+            escalationStep: 1,
+            citations: [],
+            scope: .outOfScope,
+            formulaVerdict: nil
+        )
+        #expect(TutorContract.isValid(turn))
+        let withCite = TutorTurn(
+            id: "t3",
+            sourceSpanId: "s1",
+            question: "범위 밖",
+            escalationStep: 1,
+            citations: ["s1"],
+            scope: .outOfScope,
+            formulaVerdict: nil
+        )
+        #expect(!TutorContract.isValid(withCite))
+    }
+
+    @Test("bundled tutor never returns solution dump")
+    func bundledIsSafe() throws {
+        let asset = try CourseAsset.loadBundled()
+        for span in asset.spans {
+            for step in 1...3 {
+                let turn = try BundledTutorClient(asset: asset).turn(for: span.id, escalationStep: step)
+                #expect(TutorContract.isValid(turn))
+            }
+        }
+    }
+}
+
+@Suite("Study citation event")
+struct StudyCitationTests {
+    @Test("CitationSelected resolves startSec")
+    func resolvesStart() throws {
+        let asset = try CourseAsset.loadBundled()
+        let span = asset.spans[0]
+        let start = asset.startSec(forCitation: span.id)
+        #expect(start == span.startSec)
+        #expect(asset.startSec(forCitation: "missing") == nil)
+    }
+}

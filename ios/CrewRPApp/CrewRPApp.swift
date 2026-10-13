@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import WebKit
 import UniformTypeIdentifiers
 import QuickLook
 import CrewRPCore
@@ -22,6 +23,8 @@ final class AppModel: ObservableObject {
     @Published var selectedTab = 0
     /// 홈에서 고른 할 일 — 할 일 탭으로 전환한 뒤 시트로 연다.
     @Published var pendingOpenTaskId: String?
+    /// 홈 CTA로 연 공부 캔버스.
+    @Published var studyPresented = false
     @Published var tasks: [TaskCard] = []
     @Published var readme: String = ""
     @Published var docPreview: String = ""
@@ -870,8 +873,6 @@ private struct HomeTab: View {
                     ProgressView()
                 } else if homeQuiet && (model.tasksFailed || model.readmeFailed) {
                     FailedHint { await model.refreshHomeData(forceNetwork: true) }
-                } else if homeQuiet {
-                    EmptyHint(title: "아직 소식이 없습니다", message: "할 일을 추가하거나 README를 등록해 보세요.")
                 } else {
                     List {
                         if let err = model.writeError {
@@ -884,6 +885,25 @@ private struct HomeTab: View {
                                     Text("\(crewDisplayName(session.repo)) · \(session.teamRole.label)")
                                         .foregroundStyle(.secondary)
                                 }
+                            }
+                        }
+                        Section("공부") {
+                            Button {
+                                model.studyPresented = true
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("이어서 할 공부").font(.headline)
+                                    Text(studyCourseTitle)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        if homeQuiet && model.readme.isEmpty {
+                            Section {
+                                Text("할 일을 추가하거나 README를 등록해 보세요.")
+                                    .foregroundStyle(.secondary)
                             }
                         }
                         if !model.readme.isEmpty {
@@ -933,6 +953,9 @@ private struct HomeTab: View {
                 RefreshButton(model: model)
             }
             .refreshable { await model.refreshHomeData(forceNetwork: true) }
+            .fullScreenCover(isPresented: $model.studyPresented) {
+                StudyCanvasView(onClose: { model.studyPresented = false })
+            }
         }
     }
 
@@ -942,6 +965,191 @@ private struct HomeTab: View {
 
     private var homeQuiet: Bool {
         sections.assigned.isEmpty && sections.today.isEmpty && sections.upcoming.isEmpty && model.readme.isEmpty
+    }
+
+    private var studyCourseTitle: String {
+        (try? CourseAsset.loadBundled())?.course.title ?? "공부"
+    }
+}
+
+private struct StudyCanvasView: View {
+    var onClose: () -> Void
+    @State private var asset: CourseAsset?
+    @State private var loadError: String?
+    @State private var ratio: StudySplitRatio = .balanced
+    @State private var playURL: String = ""
+    @State private var turn: TutorTurn?
+    @State private var escalation = 1
+    @State private var thoughtExpanded = false
+    @State private var draft = ""
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let asset {
+                    GeometryReader { geo in
+                        let vertical = studyCanvasStacksVertically(width: geo.size.width, height: geo.size.height)
+                        let mediaFlex = CGFloat(ratio.mediaWeight)
+                        let tutorFlex = CGFloat(ratio.tutorWeight)
+                        let total = mediaFlex + tutorFlex
+                        Group {
+                            if vertical {
+                                VStack(spacing: 0) {
+                                    mediaPane(asset: asset)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: geo.size.height * (mediaFlex / total) - 18)
+                                    splitHandle
+                                    tutorPane(asset: asset)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                }
+                            } else {
+                                HStack(spacing: 0) {
+                                    mediaPane(asset: asset)
+                                        .frame(width: geo.size.width * (mediaFlex / total) - 18)
+                                    splitHandle
+                                    tutorPane(asset: asset)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                }
+                            }
+                        }
+                    }
+                } else if let loadError {
+                    Text(loadError).padding()
+                } else {
+                    ProgressView()
+                }
+            }
+            .navigationTitle(asset?.course.title ?? "공부")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("닫기", action: onClose)
+                }
+            }
+            .task { load() }
+        }
+    }
+
+    private var splitHandle: some View {
+        HStack(spacing: 8) {
+            ForEach(StudySplitRatio.allCases, id: \.self) { r in
+                Button(r.rawValue) { ratio = r }
+                    .font(.caption2)
+                    .buttonStyle(.bordered)
+                    .tint(ratio == r ? .crewInk : .secondary)
+            }
+        }
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(Color(uiColor: .secondarySystemBackground))
+    }
+
+    private func mediaPane(asset: CourseAsset) -> some View {
+        ZStack {
+            Color.black
+            if let url = URL(string: playURL.isEmpty ? asset.course.playbackUrl : playURL) {
+                YouTubeEmbedWebView(url: url)
+                    .aspectRatio(16 / 9, contentMode: .fit)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        // 튜터 UI는 영상 영역 위에 겹치지 않는다(형제 슬롯만 사용).
+    }
+
+    private func tutorPane(asset: CourseAsset) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let turn {
+                if let thought = turn.privateThought, !thought.isEmpty {
+                    DisclosureGroup("속생각", isExpanded: $thoughtExpanded) {
+                        Text(thought).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text(turn.question)
+                    .font(.body)
+                if turn.formulaVerdict != nil {
+                    Text(turn.formulaVerdict == .correct ? "수식: 맞음" : "수식: 다시 보기")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if !turn.citations.isEmpty {
+                    Text("장면으로 이동").font(.caption).foregroundStyle(.secondary)
+                    ForEach(turn.citations, id: \.self) { cite in
+                        if let span = asset.span(id: cite) {
+                            Button {
+                                selectCitation(asset: asset, spanId: cite)
+                            } label: {
+                                Label("\(span.concept) · \(span.startSec)초", systemImage: "play.circle")
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text("장면을 보며 질문을 받아 보세요.").foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            HStack {
+                TextField("답 또는 수식", text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                Button("힌트") {
+                    escalation = min(3, escalation + 1)
+                    reloadTurn(asset: asset)
+                }
+                .buttonStyle(.bordered)
+            }
+            Button("이 장면 질문") {
+                escalation = 1
+                reloadTurn(asset: asset)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.crewInk)
+        }
+        .padding()
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    private func load() {
+        do {
+            let loaded = try CourseAsset.loadBundled()
+            asset = loaded
+            playURL = loaded.course.playbackUrl
+            escalation = 1
+            turn = try BundledTutorClient(asset: loaded).turn(for: loaded.spans[0].id, escalationStep: 1)
+        } catch {
+            loadError = "강의를 불러오지 못했습니다."
+        }
+    }
+
+    private func reloadTurn(asset: CourseAsset) {
+        guard let spanId = turn?.sourceSpanId ?? asset.spans.first?.id else { return }
+        turn = try? BundledTutorClient(asset: asset).turn(for: spanId, escalationStep: escalation)
+    }
+
+    private func selectCitation(asset: CourseAsset, spanId: String) {
+        guard let start = asset.startSec(forCitation: spanId) else { return }
+        playURL = embedPlaybackURL(asset.course.playbackUrl, startSec: start)
+        escalation = 1
+        turn = try? BundledTutorClient(asset: asset).turn(for: spanId, escalationStep: 1)
+        draft = ""
+    }
+}
+
+private struct YouTubeEmbedWebView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.allowsInlineMediaPlayback = true
+        let web = WKWebView(frame: .zero, configuration: config)
+        web.scrollView.isScrollEnabled = false
+        web.load(URLRequest(url: url))
+        return web
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        if webView.url != url {
+            webView.load(URLRequest(url: url))
+        }
     }
 }
 

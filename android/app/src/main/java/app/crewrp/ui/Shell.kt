@@ -11,12 +11,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -92,11 +97,21 @@ import androidx.compose.ui.semantics.setText
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import android.annotation.SuppressLint
+import android.provider.OpenableColumns
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import app.crewrp.CrewContent
 import app.crewrp.core.AccountLink
 import app.crewrp.core.AttachmentEntry
+import app.crewrp.core.BundledTutorClient
+import app.crewrp.core.CourseAsset
 import app.crewrp.core.CrewRepo
 import app.crewrp.core.DiscussionCategory
 import app.crewrp.core.DocBlock
@@ -104,16 +119,18 @@ import app.crewrp.core.DocEntry
 import app.crewrp.core.DocsLibraryItem
 import app.crewrp.core.Notice
 import app.crewrp.core.Session
+import app.crewrp.core.StudySplitRatio
 import app.crewrp.core.TaskCard
 import app.crewrp.core.TaskLane
 import app.crewrp.core.TeamRole
 import app.crewrp.core.ThreadMessage
-import android.provider.OpenableColumns
+import app.crewrp.core.TutorTurn
 import app.crewrp.core.canMutate
 import app.crewrp.core.crewDisplayName
 import app.crewrp.core.crewOwnerName
 import app.crewrp.core.docBlocks
 import app.crewrp.core.dueOnInput
+import app.crewrp.core.embedPlaybackUrl
 import app.crewrp.core.formatDue
 import app.crewrp.core.formatDueOnDate
 import app.crewrp.core.SHELL_TASKS_TAB_INDEX
@@ -124,6 +141,7 @@ import app.crewrp.core.normalizeAssigneeLogin
 import app.crewrp.core.parentDocsPath
 import app.crewrp.core.parseDueOnDate
 import app.crewrp.core.roleLabel
+import app.crewrp.core.studyCanvasStacksVertically
 import app.crewrp.core.taskAssigneeLabel
 import app.crewrp.core.taskLane
 import app.crewrp.core.taskMatching
@@ -292,6 +310,7 @@ fun CrewShell(
     var editingNotice by remember { mutableStateOf<Notice?>(null) }
     var editingTask by remember { mutableStateOf<TaskCard?>(null) }
     var pendingOpenTaskId by remember { mutableStateOf<String?>(null) }
+    var studyOpen by remember { mutableStateOf(false) }
     var viewingDoc by remember { mutableStateOf(false) }
     var docsAddMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -401,6 +420,7 @@ fun CrewShell(
                         pendingOpenTaskId = task.id
                         tab = SHELL_TASKS_TAB_INDEX
                     },
+                    onOpenStudy = { studyOpen = true },
                 )
                 1 -> TasksTab(content, Modifier.weight(1f), onRefresh, onOpen = { editingTask = it })
                 2 -> DocsTab(
@@ -510,6 +530,17 @@ fun CrewShell(
             },
             onDelete = { actions.onDeleteTask(task); editingTask = null },
         )
+    }
+
+    if (studyOpen) {
+        Dialog(
+            onDismissRequest = { studyOpen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                StudyCanvasScreen(onClose = { studyOpen = false })
+            }
+        }
     }
 }
 
@@ -914,14 +945,17 @@ private fun HomeTab(
     content: CrewContent,
     modifier: Modifier,
     onOpenTask: (TaskCard) -> Unit,
+    onOpenStudy: () -> Unit,
 ) {
     val today = LocalDate.now().toString()
     val sections = homeSections(content.tasks, today, content.currentLogin)
     val quiet = sections.assigned.isEmpty() && sections.today.isEmpty() && sections.upcoming.isEmpty() && content.readme.isEmpty()
+    val studyTitle = remember {
+        runCatching { CourseAsset.loadBundled().course.title }.getOrDefault("공부")
+    }
     when {
         content.loading && content.tasks.isEmpty() && content.readme.isEmpty() -> LoadingPane(modifier)
         quiet && (content.tasksFailed || content.readmeFailed) -> FailedPane(modifier)
-        quiet -> EmptyPane(modifier, "아직 소식이 없습니다", "할 일을 추가하거나 README를 등록해 보세요.")
         else -> LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -929,6 +963,26 @@ private fun HomeTab(
                         Text(session.org, style = MaterialTheme.typography.titleMedium)
                         Text("${crewDisplayName(session.repo)} · ${roleLabel(session.teamRole)}")
                     }
+                }
+            }
+            item { Text("공부", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenStudy),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("이어서 할 공부", style = MaterialTheme.typography.titleMedium)
+                        Text(studyTitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            if (quiet && content.readme.isEmpty()) {
+                item {
+                    Text(
+                        "할 일을 추가하거나 README를 등록해 보세요.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             if (content.readme.isNotEmpty()) {
@@ -963,6 +1017,200 @@ private fun HomeTab(
                     Box(Modifier.clickable { onOpenTask(task) }) { TaskRow(task) }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun StudyCanvasScreen(onClose: () -> Unit) {
+    val asset = remember { runCatching { CourseAsset.loadBundled() }.getOrNull() }
+    var ratio by remember { mutableStateOf(StudySplitRatio.BALANCED) }
+    var playUrl by remember { mutableStateOf(asset?.course?.playbackUrl.orEmpty()) }
+    var escalation by remember { mutableIntStateOf(1) }
+    var turn by remember {
+        mutableStateOf(
+            asset?.let {
+                runCatching { BundledTutorClient(it).turn(it.spans.first().id, 1) }.getOrNull()
+            },
+        )
+    }
+    var draft by remember { mutableStateOf("") }
+    var thoughtExpanded by remember { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onClose) { Text("닫기") }
+            Text(
+                asset?.course?.title ?: "공부",
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+            )
+        }
+        if (asset == null) {
+            Text("강의를 불러오지 못했습니다.", Modifier.padding(16.dp))
+            return
+        }
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val vertical = studyCanvasStacksVertically(maxWidth.value.toDouble(), maxHeight.value.toDouble())
+            val mediaW = ratio.mediaWeight.toFloat()
+            val tutorW = ratio.tutorWeight.toFloat()
+            val total = mediaW + tutorW
+            if (vertical) {
+                Column(Modifier.fillMaxSize()) {
+                    StudyMediaPane(playUrl, Modifier.fillMaxWidth().weight(mediaW / total))
+                    StudySplitHandle(ratio) { ratio = it }
+                    StudyTutorPane(
+                        asset = asset,
+                        turn = turn,
+                        draft = draft,
+                        thoughtExpanded = thoughtExpanded,
+                        onDraft = { draft = it },
+                        onThought = { thoughtExpanded = it },
+                        onHint = {
+                            escalation = (escalation + 1).coerceAtMost(3)
+                            val spanId = turn?.sourceSpanId ?: asset.spans.first().id
+                            turn = BundledTutorClient(asset).turn(spanId, escalation)
+                        },
+                        onAsk = {
+                            escalation = 1
+                            val spanId = turn?.sourceSpanId ?: asset.spans.first().id
+                            turn = BundledTutorClient(asset).turn(spanId, 1)
+                        },
+                        onCite = { spanId ->
+                            val start = asset.startSecForCitation(spanId) ?: return@StudyTutorPane
+                            playUrl = embedPlaybackUrl(asset.course.playbackUrl, start)
+                            escalation = 1
+                            turn = BundledTutorClient(asset).turn(spanId, 1)
+                            draft = ""
+                        },
+                        modifier = Modifier.fillMaxWidth().weight(tutorW / total),
+                    )
+                }
+            } else {
+                Row(Modifier.fillMaxSize()) {
+                    StudyMediaPane(playUrl, Modifier.fillMaxHeight().weight(mediaW / total))
+                    StudySplitHandle(ratio) { ratio = it }
+                    StudyTutorPane(
+                        asset = asset,
+                        turn = turn,
+                        draft = draft,
+                        thoughtExpanded = thoughtExpanded,
+                        onDraft = { draft = it },
+                        onThought = { thoughtExpanded = it },
+                        onHint = {
+                            escalation = (escalation + 1).coerceAtMost(3)
+                            val spanId = turn?.sourceSpanId ?: asset.spans.first().id
+                            turn = BundledTutorClient(asset).turn(spanId, escalation)
+                        },
+                        onAsk = {
+                            escalation = 1
+                            val spanId = turn?.sourceSpanId ?: asset.spans.first().id
+                            turn = BundledTutorClient(asset).turn(spanId, 1)
+                        },
+                        onCite = { spanId ->
+                            val start = asset.startSecForCitation(spanId) ?: return@StudyTutorPane
+                            playUrl = embedPlaybackUrl(asset.course.playbackUrl, start)
+                            escalation = 1
+                            turn = BundledTutorClient(asset).turn(spanId, 1)
+                            draft = ""
+                        },
+                        modifier = Modifier.fillMaxHeight().weight(tutorW / total),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StudySplitHandle(ratio: StudySplitRatio, onChange: (StudySplitRatio) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        StudySplitRatio.entries.forEach { r ->
+            TextButton(onClick = { onChange(r) }) {
+                Text(
+                    r.label,
+                    color = if (r == ratio) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun StudyMediaPane(url: String, modifier: Modifier) {
+    Box(modifier.background(androidx.compose.ui.graphics.Color.Black), contentAlignment = Alignment.Center) {
+        AndroidView(
+            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+            factory = { context ->
+                WebView(context).apply {
+                    webViewClient = WebViewClient()
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.mediaPlaybackRequiresUserGesture = false
+                    loadUrl(url)
+                }
+            },
+            update = { web ->
+                if (web.url != url) web.loadUrl(url)
+            },
+        )
+    }
+}
+
+@Composable
+private fun StudyTutorPane(
+    asset: CourseAsset,
+    turn: TutorTurn?,
+    draft: String,
+    thoughtExpanded: Boolean,
+    onDraft: (String) -> Unit,
+    onThought: (Boolean) -> Unit,
+    onHint: () -> Unit,
+    onAsk: () -> Unit,
+    onCite: (String) -> Unit,
+    modifier: Modifier,
+) {
+    Column(modifier.padding(12.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (turn != null) {
+            val thought = turn.privateThought
+            if (!thought.isNullOrBlank()) {
+                TextButton(onClick = { onThought(!thoughtExpanded) }) {
+                    Text(if (thoughtExpanded) "속생각 접기" else "속생각")
+                }
+                if (thoughtExpanded) {
+                    Text(thought, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Text(turn.question, style = MaterialTheme.typography.bodyLarge)
+            turn.citations.forEach { cite ->
+                val span = asset.span(cite) ?: return@forEach
+                TextButton(onClick = { onCite(cite) }) {
+                    Text("${span.concept} · ${span.startSec}초")
+                }
+            }
+        } else {
+            Text("장면을 보며 질문을 받아 보세요.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        OutlinedTextField(
+            value = draft,
+            onValueChange = onDraft,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("답 또는 수식") },
+            singleLine = true,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onHint) { Text("힌트") }
+            Button(onClick = onAsk) { Text("이 장면 질문") }
         }
     }
 }
