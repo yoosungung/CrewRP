@@ -33,6 +33,34 @@ struct StudyPlaybackURLTests {
         #expect(embedPlaybackURL(base, startSec: nil) == base)
         #expect(embedPlaybackURL(base, startSec: 0) == base)
     }
+
+    @Test("embed referer identifies app for YouTube WebView")
+    func embedReferer() {
+        #expect(youtubeEmbedReferer == "https://app.crewrp")
+        let headers = youtubeEmbedRequestHeaders()
+        #expect(headers["Referer"] == youtubeEmbedReferer)
+        #expect(headers["Referrer-Policy"] == "strict-origin-when-cross-origin")
+    }
+
+    @Test("embed HTML includes escaped playback URL and referrer policy")
+    func embedHTML() {
+        let html = youtubeEmbedHTML(playbackURL: "https://www.youtube.com/embed/HtSuA80QTyo?start=90")
+        #expect(html.contains("HtSuA80QTyo"))
+        #expect(html.contains("start=90"))
+        #expect(html.contains("enablejsapi=1"))
+        #expect(html.contains("origin=https://app.crewrp"))
+        #expect(html.contains("referrerpolicy=\"strict-origin-when-cross-origin\""))
+        #expect(html.contains("crewrpUnmute"))
+        #expect(html.contains("<iframe"))
+    }
+
+    @Test("embed player URL adds jsapi and origin")
+    func embedPlayerURL() {
+        let url = youtubeEmbedPlayerURL("https://www.youtube.com/embed/HtSuA80QTyo?start=12")
+        #expect(url.contains("enablejsapi=1"))
+        #expect(url.contains("origin=https://app.crewrp"))
+        #expect(url.contains("start=12"))
+    }
 }
 
 @Suite("Study split ratio")

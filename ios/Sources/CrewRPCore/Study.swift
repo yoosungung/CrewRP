@@ -154,6 +154,59 @@ public func embedPlaybackURL(_ base: String, startSec: Int?) -> String {
     return components.string ?? base
 }
 
+/// WebView에서 YouTube embed 시 보낼 Referer (Error 153 방지). 번들/패키지 ID와 맞춤.
+public let youtubeEmbedReferer = "https://app.crewrp"
+
+public func youtubeEmbedRequestHeaders() -> [String: String] {
+    [
+        "Referer": youtubeEmbedReferer,
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+    ]
+}
+
+/// Embed URL에 `enablejsapi`·`origin`을 붙여 postMessage 언뮤트가 되게 한다.
+public func youtubeEmbedPlayerURL(_ playbackURL: String) -> String {
+    guard var components = URLComponents(string: playbackURL) else {
+        let sep = playbackURL.contains("?") ? "&" : "?"
+        return "\(playbackURL)\(sep)enablejsapi=1&origin=\(youtubeEmbedReferer)"
+    }
+    var items = (components.queryItems ?? []).filter { $0.name != "enablejsapi" && $0.name != "origin" }
+    items.append(URLQueryItem(name: "enablejsapi", value: "1"))
+    items.append(URLQueryItem(name: "origin", value: youtubeEmbedReferer))
+    components.queryItems = items
+    return components.string ?? playbackURL
+}
+
+/// Embed를 iframe으로 감싼 HTML. `baseURL`/`Referer` = `youtubeEmbedReferer`.
+public func youtubeEmbedHTML(playbackURL: String) -> String {
+    let src = youtubeEmbedPlayerURL(playbackURL)
+        .replacingOccurrences(of: "&", with: "&amp;")
+        .replacingOccurrences(of: "\"", with: "&quot;")
+        .replacingOccurrences(of: "<", with: "&lt;")
+    return """
+    <!DOCTYPE html><html><head>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{border:0;width:100%;height:100%;min-height:100%}</style>
+    </head><body>
+    <iframe id="yt" src="\(src)" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    <script>
+    function crewrpUnmute(){
+      var f=document.getElementById('yt');
+      if(!f||!f.contentWindow)return;
+      var t='*';
+      f.contentWindow.postMessage(JSON.stringify({event:'command',func:'unMute',args:[]}),t);
+      f.contentWindow.postMessage(JSON.stringify({event:'command',func:'setVolume',args:[100]}),t);
+    }
+    document.getElementById('yt').addEventListener('load',function(){
+      crewrpUnmute();
+      setInterval(crewrpUnmute,2000);
+    });
+    </script>
+    </body></html>
+    """
+}
+
 public enum CourseAssetError: Error, Equatable {
     case invalidJSON
     case missingCourse

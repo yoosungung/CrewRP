@@ -105,8 +105,20 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import android.annotation.SuppressLint
 import android.provider.OpenableColumns
+import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.os.Build
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.runtime.DisposableEffect
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import app.crewrp.CrewContent
 import app.crewrp.core.AccountLink
 import app.crewrp.core.AttachmentEntry
@@ -125,12 +137,14 @@ import app.crewrp.core.TaskLane
 import app.crewrp.core.TeamRole
 import app.crewrp.core.ThreadMessage
 import app.crewrp.core.TutorTurn
+import app.crewrp.core.YOUTUBE_EMBED_REFERER
 import app.crewrp.core.canMutate
 import app.crewrp.core.crewDisplayName
 import app.crewrp.core.crewOwnerName
 import app.crewrp.core.docBlocks
 import app.crewrp.core.dueOnInput
 import app.crewrp.core.embedPlaybackUrl
+import app.crewrp.core.youtubeEmbedHtml
 import app.crewrp.core.formatDue
 import app.crewrp.core.formatDueOnDate
 import app.crewrp.core.SHELL_TASKS_TAB_INDEX
@@ -1148,20 +1162,82 @@ private fun StudySplitHandle(ratio: StudySplitRatio, onChange: (StudySplitRatio)
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun StudyMediaPane(url: String, modifier: Modifier) {
+    val focusContext = androidx.compose.ui.platform.LocalContext.current
+    DisposableEffect(Unit) {
+        val am = focusContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val attrs =
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                .build()
+        val focusRequest =
+            if (Build.VERSION.SDK_INT >= 26) {
+                AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(attrs)
+                    .setOnAudioFocusChangeListener { }
+                    .build()
+                    .also { am.requestAudioFocus(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+                null
+            }
+        onDispose {
+            if (Build.VERSION.SDK_INT >= 26 && focusRequest != null) {
+                am.abandonAudioFocusRequest(focusRequest)
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(null)
+            }
+        }
+    }
     Box(modifier.background(androidx.compose.ui.graphics.Color.Black), contentAlignment = Alignment.Center) {
         AndroidView(
             modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
             factory = { context ->
                 WebView(context).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     webViewClient = WebViewClient()
+                    // HTML5 video surface / fullscreen hooks — 없으면 시각만 가고 화면·소리가 비는 경우가 있음.
+                    webChromeClient = WebChromeClient()
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mediaPlaybackRequiresUserGesture = false
-                    loadUrl(url)
+                    settings.loadWithOverviewMode = true
+                    settings.useWideViewPort = true
+                    settings.cacheMode = WebSettings.LOAD_DEFAULT
+                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.MUTE_AUDIO)) {
+                        WebViewCompat.setAudioMuted(this, false)
+                    }
+                    tag = url
+                    loadDataWithBaseURL(
+                        YOUTUBE_EMBED_REFERER,
+                        youtubeEmbedHtml(url),
+                        "text/html",
+                        "UTF-8",
+                        null,
+                    )
                 }
             },
             update = { web ->
-                if (web.url != url) web.loadUrl(url)
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.MUTE_AUDIO)) {
+                    WebViewCompat.setAudioMuted(web, false)
+                }
+                if (web.tag != url) {
+                    web.tag = url
+                    web.loadDataWithBaseURL(
+                        YOUTUBE_EMBED_REFERER,
+                        youtubeEmbedHtml(url),
+                        "text/html",
+                        "UTF-8",
+                        null,
+                    )
+                }
             },
         )
     }

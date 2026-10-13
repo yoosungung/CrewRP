@@ -45,6 +45,34 @@ class StudyPlaybackUrlTest {
         assertEquals(base, embedPlaybackUrl(base, null))
         assertEquals(base, embedPlaybackUrl(base, 0))
     }
+
+    @Test
+    fun embedRefererIdentifiesAppForYouTubeWebView() {
+        assertEquals("https://app.crewrp", YOUTUBE_EMBED_REFERER)
+        val headers = youtubeEmbedRequestHeaders()
+        assertEquals(YOUTUBE_EMBED_REFERER, headers["Referer"])
+        assertEquals("strict-origin-when-cross-origin", headers["Referrer-Policy"])
+    }
+
+    @Test
+    fun embedHtmlIncludesEscapedPlaybackUrlAndReferrerPolicy() {
+        val html = youtubeEmbedHtml("https://www.youtube.com/embed/HtSuA80QTyo?start=90")
+        assertTrue(html.contains("HtSuA80QTyo"))
+        assertTrue(html.contains("start=90"))
+        assertTrue(html.contains("enablejsapi=1"))
+        assertTrue(html.contains("origin=https://app.crewrp"))
+        assertTrue(html.contains("referrerpolicy=\"strict-origin-when-cross-origin\""))
+        assertTrue(html.contains("crewrpUnmute"))
+        assertTrue(html.contains("<iframe"))
+    }
+
+    @Test
+    fun embedPlayerUrlAddsJsApiAndOrigin() {
+        val url = youtubeEmbedPlayerUrl("https://www.youtube.com/embed/HtSuA80QTyo?start=12")
+        assertTrue(url.contains("enablejsapi=1"))
+        assertTrue(url.contains("origin=https://app.crewrp"))
+        assertTrue(url.contains("start=12"))
+    }
 }
 
 class StudySplitRatioTest {

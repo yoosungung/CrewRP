@@ -12,7 +12,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 - 멤버 구성: 운영진이 **이메일**로 Organization 초대를 보낸다. 따라서 크루 보관소는 GitHub Free Organization 소속 private repository여야 한다. Team slug는 `admins`(운영진) / `members`(멤버).
 - 화면 문구에 Git, Commit, PR, Issue, Discussion을 노출하지 않는다. 사용자 용어는 자료실, 할 일, 게시판·카테고리·글, 서식, 소통, 공부, 크루 시작, 초대다.
 - **공부** 세션은 영상 재생과 튜터 질문이 한 캔버스에 같이 있는 동안만 이어진다. 장면과 말이 서로 다른 곳으로 갈라지면 세션이 아니다. 경험 정본은 [docs/study/PRODUCT.md](docs/study/PRODUCT.md), 스키마는 §7이다.
-- 공부 UI는 네이티브다. **동영상만** WebView로 연다(`playbackUrl` / YouTube embed를 최상위 문서로 로드). UniTutor SPA를 앱에 넣지 않는다. LLM 시크릿은 앱 바이너리에 넣지 않는다.
+- 공부 UI는 네이티브다. **동영상만** WebView로 연다(`playbackUrl` / YouTube embed HTML + `baseURL`/`Referer`=`https://app.crewrp`). UniTutor SPA를 앱에 넣지 않는다. LLM 시크릿은 앱 바이너리에 넣지 않는다. Referer 미전송 시 Error 153. Android는 `WebChromeClient`·하드웨어 가속·WebView 언뮤트(`MUTE_AUDIO`)·embed `enablejsapi` 언뮤트가 필요(없면 화면만 나오고 소리가 빌 수 있음).
 - 앱 바이너리에 OAuth client secret과 GitHub App / Discord client secret을 넣지 않는다. 로그인은 시스템 브라우저와 Authorization Code + PKCE(S256)다. GitHub 액세스 토큰은 iOS Keychain, Android EncryptedSharedPreferences에만 둔다.
 - GitHub·Discord 토큰 엔드포인트는 `client_secret`을 요구한다. 시크릿은 `auth-bridge` Cloudflare Worker에만 두고, 앱은 코드·verifier를 Worker에 넘겨 교환한다. 사용자 토큰은 Worker에 저장하지 않는다.
 - **계정:** CrewRP 신원은 GitHub 로그인으로 만든다. Discord는 **선택 연동**(identify). GitHub 토큰으로 Discord API에 로그인하지 않는다. 연동 결과는 기기에 `discord_user_id`·표시 이름만 둔다(Discord 액세스 토큰은 연동 직후 폐기).
@@ -136,7 +136,7 @@ Worker가 구독하는 Webhook과 앱에 보이는 알림 이름:
 | `id` | 강의 식별자 |
 | `title` | 강의 이름 |
 | `subject` | 과목 |
-| `playbackUrl` | 영상 WebView가 여는 재생 주소(예: YouTube embed URL) |
+| `playbackUrl` | 영상 WebView가 여는 재생 주소(예: YouTube embed URL). 로드 시 `Referer: https://app.crewrp` |
 
 ### 7.3 `SourceSpan`
 

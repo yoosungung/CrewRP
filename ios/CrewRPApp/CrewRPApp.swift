@@ -1142,14 +1142,22 @@ private struct YouTubeEmbedWebView: UIViewRepresentable {
         config.allowsInlineMediaPlayback = true
         let web = WKWebView(frame: .zero, configuration: config)
         web.scrollView.isScrollEnabled = false
-        web.load(URLRequest(url: url))
+        web.tag = url.absoluteString.hashValue
+        Self.loadEmbed(url, in: web)
         return web
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        if webView.url != url {
-            webView.load(URLRequest(url: url))
+        let tag = url.absoluteString.hashValue
+        if webView.tag != tag {
+            webView.tag = tag
+            Self.loadEmbed(url, in: webView)
         }
+    }
+
+    /// WKWebView는 URLRequest Referer를 종종 무시하므로 baseURL로 식별자를 보낸다(Error 153).
+    private static func loadEmbed(_ url: URL, in webView: WKWebView) {
+        webView.loadHTMLString(youtubeEmbedHTML(playbackURL: url.absoluteString), baseURL: URL(string: youtubeEmbedReferer))
     }
 }
 

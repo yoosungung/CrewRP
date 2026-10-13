@@ -98,6 +98,66 @@ fun embedPlaybackUrl(base: String, startSec: Int?): String {
     }
 }
 
+/** WebView에서 YouTube embed 시 보낼 Referer (Error 153 방지). applicationId와 맞춤. */
+const val YOUTUBE_EMBED_REFERER = "https://app.crewrp"
+
+fun youtubeEmbedRequestHeaders(): Map<String, String> =
+    mapOf(
+        "Referer" to YOUTUBE_EMBED_REFERER,
+        "Referrer-Policy" to "strict-origin-when-cross-origin",
+    )
+
+/** Embed URL에 `enablejsapi`·`origin`을 붙여 postMessage 언뮤트가 되게 한다. */
+fun youtubeEmbedPlayerUrl(playbackUrl: String): String {
+    return try {
+        val uri = URI(playbackUrl)
+        val params = linkedMapOf<String, String>()
+        uri.query?.split('&')?.filter { it.isNotBlank() }?.forEach { part ->
+            val eq = part.indexOf('=')
+            if (eq > 0) params[part.substring(0, eq)] = part.substring(eq + 1)
+            else params[part] = ""
+        }
+        params["enablejsapi"] = "1"
+        params["origin"] = YOUTUBE_EMBED_REFERER
+        val query = params.entries.joinToString("&") { (k, v) -> if (v.isEmpty()) k else "$k=$v" }
+        URI(uri.scheme, uri.authority, uri.path, query, uri.fragment).toString()
+    } catch (_: Exception) {
+        val sep = if ('?' in playbackUrl) "&" else "?"
+        "$playbackUrl${sep}enablejsapi=1&origin=$YOUTUBE_EMBED_REFERER"
+    }
+}
+
+/** Embed를 iframe으로 감싼 HTML. `loadDataWithBaseURL`의 baseUrl = [YOUTUBE_EMBED_REFERER]. */
+fun youtubeEmbedHtml(playbackUrl: String): String {
+    val src =
+        youtubeEmbedPlayerUrl(playbackUrl)
+            .replace("&", "&amp;")
+            .replace("\"", "&quot;")
+            .replace("<", "&lt;")
+    return """
+        <!DOCTYPE html><html><head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+        <meta name="referrer" content="strict-origin-when-cross-origin">
+        <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{border:0;width:100%;height:100%;min-height:100%}</style>
+        </head><body>
+        <iframe id="yt" src="$src" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+        <script>
+        function crewrpUnmute(){
+          var f=document.getElementById('yt');
+          if(!f||!f.contentWindow)return;
+          var t='*';
+          f.contentWindow.postMessage(JSON.stringify({event:'command',func:'unMute',args:[]}),t);
+          f.contentWindow.postMessage(JSON.stringify({event:'command',func:'setVolume',args:[100]}),t);
+        }
+        document.getElementById('yt').addEventListener('load',function(){
+          crewrpUnmute();
+          setInterval(crewrpUnmute,2000);
+        });
+        </script>
+        </body></html>
+        """.trimIndent()
+}
+
 class CourseAssetException(message: String) : Exception(message)
 
 data class BundledTutorPrompt(
