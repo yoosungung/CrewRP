@@ -379,6 +379,7 @@ public struct CourseAsset: Sendable, Equatable, Identifiable {
         return CourseAsset(course: dto.course, spans: dto.spans, tutorPrompts: prompts, knowledgeEdges: resolved)
     }
 
+    /// 단위 테스트·튜터 계약 픽스처. 학습 탭·홈 CTA 카탈로그 폴백으로 쓰지 않는다.
     public static func loadBundled() throws -> CourseAsset {
         try parse(BundledStudyJSON.csAlgoIntro)
     }

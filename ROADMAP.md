@@ -65,9 +65,9 @@
 
 ### S7-01 · 공개 강의 1개 정적 자산
 
-- **내용**: 자막(VTT)·슬라이드 라벨을 배치 1회로 `CourseRef` + `SourceSpan[]` JSON. 앱 번들 또는 크루 repo에서 로드. 런타임 인덱싱 $0.
+- **내용**: 자막(VTT)·슬라이드 라벨을 배치 1회로 `CourseRef` + `SourceSpan[]` JSON. 크루 repo에서 로드(UI). 런타임 인덱싱 $0.
 - **완료 조건**: 한 강의의 `id`/`playbackUrl`/`SourceSpan`이 로드된다.
-- **상태**: `done` — 번들 `cs-algo-intro-01`(MIT 6.006 L1). 첫 과목 **CS**.
+- **상태**: `done` — 테스트 픽스처 `cs-algo-intro-01`(MIT 6.006 L1). 첫 과목 **CS**.
 
 ### S7-02 · 적응형 2분할 공부 캔버스 (네이티브)
 
@@ -131,9 +131,9 @@
 
 ### S7-11 · 과목·수업 카탈로그 로드
 
-- **내용**: `.crewrp/study/subjects.json`·`courses.json`·`course.json` 읽기. 과목→수업 목록 UI. repo 비어 있으면 번들 `cs-algo-intro-01` 폴백 1개.
+- **내용**: `.crewrp/study/subjects.json`·`courses.json`·`course.json` 읽기. 과목→수업 목록 UI. repo 비면 빈 상태(번들 UI 폴백 없음; `loadBundled`는 테스트 픽스처만).
 - **의존**: S7-10
-- **완료 조건**: 픽스처/실 repo에서 과목·수업이 목록에 나오고 탭하면 기존 캔버스가 열린다.
+- **완료 조건**: 픽스처/실 repo에서 과목·수업이 목록에 나오고 탭하면 기존 캔버스가 열린다. 카탈로그 비면 빈 UI.
 - **상태**: `done`
 
 ### S7-12 · 최근 수업 (로컬)

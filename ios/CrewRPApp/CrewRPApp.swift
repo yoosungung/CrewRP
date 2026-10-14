@@ -232,19 +232,12 @@ final class AppModel: ObservableObject {
         )) ?? []
     }
 
-    func openStudyCourse(subjectId: String, courseId: String, title: String, bundled: Bool) async {
-        let asset: CourseAsset?
-        if bundled {
-            asset = try? CourseAsset.loadBundled()
-        } else if let token = try? tokens.loadAccessToken(), let parts = repoParts {
-            let client = StudyCatalogClient(transport: transport)
-            asset = (try? await client.loadCourseAsset(
-                owner: parts.owner, repo: parts.repo, subjectId: subjectId, courseId: courseId, token: token
-            )) ?? (try? CourseAsset.loadBundled())
-        } else {
-            asset = try? CourseAsset.loadBundled()
-        }
-        guard let asset else { return }
+    func openStudyCourse(subjectId: String, courseId: String, title: String) async {
+        guard let token = try? tokens.loadAccessToken(), let parts = repoParts else { return }
+        let client = StudyCatalogClient(transport: transport)
+        guard let asset = try? await client.loadCourseAsset(
+            owner: parts.owner, repo: parts.repo, subjectId: subjectId, courseId: courseId, token: token
+        ) else { return }
         _ = try? recordRecentStudy(
             cache: cache,
             entry: RecentStudyEntry(
@@ -1049,11 +1042,13 @@ private struct HomeTab: View {
                         Section("공부") {
                             Button {
                                 model.selectedTab = shellStudyTabIndex
-                                Task {
-                                    if let recent = model.studyRecent.first {
-                                        await model.openStudyCourse(subjectId: recent.subjectId, courseId: recent.courseId, title: recent.title, bundled: false)
-                                    } else {
-                                        await model.openStudyCourse(subjectId: "cs", courseId: "cs-algo-intro-01", title: "번들 수업", bundled: true)
+                                if let recent = model.studyRecent.first {
+                                    Task {
+                                        await model.openStudyCourse(
+                                            subjectId: recent.subjectId,
+                                            courseId: recent.courseId,
+                                            title: recent.title
+                                        )
                                     }
                                 }
                             } label: {
@@ -1131,7 +1126,10 @@ private struct HomeTab: View {
     }
 
     private var studyCourseTitle: String {
-        (try? CourseAsset.loadBundled())?.course.title ?? "공부"
+        if let recent = model.studyRecent.first {
+            return recent.title.isEmpty ? recent.courseId : recent.title
+        }
+        return studyEmptyHomeSubtitle
     }
 }
 
@@ -1152,36 +1150,49 @@ private struct StudyTab: View {
             List {
                 Section("최근 수업") {
                     if model.studyRecent.isEmpty {
-                        Button("번들 수업으로 시작") {
-                            Task { await model.openStudyCourse(subjectId: "cs", courseId: "cs-algo-intro-01", title: "번들 수업", bundled: true) }
-                        }
+                        Text(studyEmptyRecentMessage)
+                            .foregroundStyle(.secondary)
                     } else {
                         ForEach(model.studyRecent, id: \.courseId) { entry in
                             Button(entry.title.isEmpty ? entry.courseId : entry.title) {
-                                let bundled = entry.courseId == "cs-algo-intro-01"
-                                Task { await model.openStudyCourse(subjectId: entry.subjectId, courseId: entry.courseId, title: entry.title, bundled: bundled) }
+                                Task {
+                                    await model.openStudyCourse(
+                                        subjectId: entry.subjectId,
+                                        courseId: entry.courseId,
+                                        title: entry.title
+                                    )
+                                }
                             }
                         }
                     }
                 }
                 Section("과목 · 수업") {
-                    let subjects = model.studySubjects.isEmpty ? [StudySubject(id: "cs", title: "CS")] : model.studySubjects
-                    ForEach(subjects) { subject in
-                        Button(subject.title) {
-                            selectedSubject = subject.id
-                            Task { await model.loadStudyCourses(subjectId: subject.id) }
-                        }
-                        .foregroundStyle(selectedSubject == subject.id ? Color.crewInk : .primary)
-                    }
-                    if let selectedSubject {
-                        if model.studyCourses.isEmpty {
-                            Button("번들 수업 (폴백)") {
-                                Task { await model.openStudyCourse(subjectId: selectedSubject, courseId: "cs-algo-intro-01", title: "번들 수업", bundled: true) }
+                    if model.studySubjects.isEmpty {
+                        Text(studyEmptyCatalogMessage)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(model.studySubjects) { subject in
+                            Button(subject.title) {
+                                selectedSubject = subject.id
+                                Task { await model.loadStudyCourses(subjectId: subject.id) }
                             }
+                            .foregroundStyle(selectedSubject == subject.id ? Color.crewInk : .primary)
                         }
-                        ForEach(model.studyCourses) { course in
-                            Button(course.title) {
-                                Task { await model.openStudyCourse(subjectId: selectedSubject, courseId: course.id, title: course.title, bundled: false) }
+                        if let selectedSubject {
+                            if model.studyCourses.isEmpty {
+                                Text(studyEmptyCatalogMessage)
+                                    .foregroundStyle(.secondary)
+                            }
+                            ForEach(model.studyCourses) { course in
+                                Button(course.title) {
+                                    Task {
+                                        await model.openStudyCourse(
+                                            subjectId: selectedSubject,
+                                            courseId: course.id,
+                                            title: course.title
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1449,15 +1460,11 @@ private struct StudyCanvasView: View {
     }
 
     private func load() {
-        do {
-            if let initialAsset {
-                asset = initialAsset
-                return
-            }
-            asset = try CourseAsset.loadBundled()
-        } catch {
-            loadError = "강의를 불러오지 못했습니다."
+        if let initialAsset {
+            asset = initialAsset
+            return
         }
+        loadError = "강의를 불러오지 못했습니다."
     }
 
     private func syncToActive(_ next: StudyPath, asset: CourseAsset) {

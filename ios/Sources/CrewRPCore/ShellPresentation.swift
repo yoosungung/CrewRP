@@ -197,6 +197,11 @@ public let shellStudyTabIndex = 2
 public let shellDocsTabIndex = 3
 public let shellTalkTabIndex = 4
 
+/// 학습 탭·홈 CTA 빈 상태(번들 폴백 없음).
+public let studyEmptyRecentMessage = "최근 수업이 없어요"
+public let studyEmptyCatalogMessage = "수업이 아직 없어요"
+public let studyEmptyHomeSubtitle = "학습에서 수업을 고르세요"
+
 public func taskMatching(id: String, in tasks: [TaskCard]) -> TaskCard? {
     tasks.first { $0.id == id }
 }

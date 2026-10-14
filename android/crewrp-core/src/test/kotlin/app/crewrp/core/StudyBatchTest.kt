@@ -111,4 +111,13 @@ class StudyShellTabIndexTest {
         assertEquals(3, SHELL_DOCS_TAB_INDEX)
         assertEquals(4, SHELL_TALK_TAB_INDEX)
     }
+
+    @Test
+    fun studyEmptyCopyHasNoBundledFallback() {
+        assertTrue(STUDY_EMPTY_RECENT_MESSAGE.isNotEmpty())
+        assertTrue(STUDY_EMPTY_CATALOG_MESSAGE.isNotEmpty())
+        assertTrue(STUDY_EMPTY_HOME_SUBTITLE.isNotEmpty())
+        assertTrue(!STUDY_EMPTY_RECENT_MESSAGE.contains("번들"))
+        assertTrue(!STUDY_EMPTY_CATALOG_MESSAGE.contains("번들"))
+    }
 }

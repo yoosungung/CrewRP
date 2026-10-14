@@ -541,20 +541,16 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 },
-                                onOpenStudyCourse = { subjectId, courseId, title, bundled ->
-                                    val token = tokens.loadAccessToken()
+                                onOpenStudyCourse = { subjectId, courseId, title ->
+                                    val token = tokens.loadAccessToken() ?: return@CrewActions
                                     thread {
-                                        val asset = if (bundled || token == null) {
-                                            runCatching { CourseAsset.loadBundled() }.getOrNull()
-                                        } else {
-                                            val parts = active.repo.split("/")
-                                            if (parts.size != 2) null
-                                            else runCatching {
-                                                StudyCatalogClient(transport).loadCourseAsset(
-                                                    parts[0], parts[1], subjectId, courseId, token,
-                                                ) ?: CourseAsset.loadBundled()
-                                            }.getOrNull()
-                                        }
+                                        val parts = active.repo.split("/")
+                                        val asset = if (parts.size != 2) null
+                                        else runCatching {
+                                            StudyCatalogClient(transport).loadCourseAsset(
+                                                parts[0], parts[1], subjectId, courseId, token,
+                                            )
+                                        }.getOrNull()
                                         if (asset != null) {
                                             runCatching {
                                                 recordRecentStudy(

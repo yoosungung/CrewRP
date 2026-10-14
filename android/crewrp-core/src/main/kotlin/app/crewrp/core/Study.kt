@@ -311,6 +311,7 @@ data class CourseAsset(
             return CourseAsset(course, spans, prompts, resolvedEdges)
         }
 
+        /** 단위 테스트·튜터 계약 픽스처. 학습 탭·홈 CTA 카탈로그 폴백으로 쓰지 않는다. */
         fun loadBundled(): CourseAsset = parse(BundledStudyJson.CS_ALGO_INTRO)
     }
 }

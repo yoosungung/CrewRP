@@ -137,10 +137,8 @@ import app.crewrp.core.ConceptMarker
 import app.crewrp.core.PathPlacement
 import app.crewrp.core.RecentStudyEntry
 import app.crewrp.core.Session
-import app.crewrp.core.StudyCourseSummary
 import app.crewrp.core.StudyPath
 import app.crewrp.core.StudySplitRatio
-import app.crewrp.core.StudySubject
 import app.crewrp.core.TaskCard
 import app.crewrp.core.TaskLane
 import app.crewrp.core.TeamRole
@@ -160,6 +158,9 @@ import app.crewrp.core.SHELL_DOCS_TAB_INDEX
 import app.crewrp.core.SHELL_STUDY_TAB_INDEX
 import app.crewrp.core.SHELL_TALK_TAB_INDEX
 import app.crewrp.core.SHELL_TASKS_TAB_INDEX
+import app.crewrp.core.STUDY_EMPTY_CATALOG_MESSAGE
+import app.crewrp.core.STUDY_EMPTY_HOME_SUBTITLE
+import app.crewrp.core.STUDY_EMPTY_RECENT_MESSAGE
 import app.crewrp.core.homeSections
 import app.crewrp.core.kanbanUsesStackedLanes
 import app.crewrp.core.listedLibrary
@@ -227,7 +228,7 @@ data class CrewActions(
     val onUpdateBoardComment: (commentId: String, body: String) -> Unit,
     val onDeleteBoardComment: (commentId: String) -> Unit,
     val onLoadStudyCourses: (subjectId: String) -> Unit,
-    val onOpenStudyCourse: (subjectId: String, courseId: String, title: String, bundled: Boolean) -> Unit,
+    val onOpenStudyCourse: (subjectId: String, courseId: String, title: String) -> Unit,
     val onSaveStudySubject: (id: String, title: String) -> Unit,
     val onSaveStudyCourse: (
         subjectId: String,
@@ -464,9 +465,7 @@ fun CrewShell(
                         tab = SHELL_STUDY_TAB_INDEX
                         val recent = content.studyRecent.firstOrNull()
                         if (recent != null) {
-                            actions.onOpenStudyCourse(recent.subjectId, recent.courseId, recent.title, false)
-                        } else {
-                            actions.onOpenStudyCourse("cs", "cs-algo-intro-01", "공부", true)
+                            actions.onOpenStudyCourse(recent.subjectId, recent.courseId, recent.title)
                         }
                     },
                 )
@@ -476,8 +475,8 @@ fun CrewShell(
                     isAdmin = isAdmin,
                     modifier = Modifier.weight(1f),
                     onSelectSubject = actions.onLoadStudyCourses,
-                    onOpenCourse = { subjectId, courseId, title, bundled ->
-                        actions.onOpenStudyCourse(subjectId, courseId, title, bundled)
+                    onOpenCourse = { subjectId, courseId, title ->
+                        actions.onOpenStudyCourse(subjectId, courseId, title)
                     },
                     onSaveSubject = actions.onSaveStudySubject,
                     onSaveCourse = actions.onSaveStudyCourse,
@@ -1009,9 +1008,9 @@ private fun HomeTab(
     val today = LocalDate.now().toString()
     val sections = homeSections(content.tasks, today, content.currentLogin)
     val quiet = sections.assigned.isEmpty() && sections.today.isEmpty() && sections.upcoming.isEmpty() && content.readme.isEmpty()
-    val studyTitle = remember {
-        runCatching { CourseAsset.loadBundled().course.title }.getOrDefault("공부")
-    }
+    val studyTitle = content.studyRecent.firstOrNull()?.let { entry ->
+        entry.title.ifBlank { entry.courseId }
+    } ?: STUDY_EMPTY_HOME_SUBTITLE
     when {
         content.loading && content.tasks.isEmpty() && content.readme.isEmpty() -> LoadingPane(modifier)
         quiet && (content.tasksFailed || content.readmeFailed) -> FailedPane(modifier)
@@ -1082,9 +1081,7 @@ private fun HomeTab(
 
 @Composable
 private fun StudyCanvasScreen(onClose: () -> Unit, initialAsset: CourseAsset? = null) {
-    val asset = remember(initialAsset) {
-        initialAsset ?: runCatching { CourseAsset.loadBundled() }.getOrNull()
-    }
+    val asset = remember(initialAsset) { initialAsset }
     var known by remember { mutableStateOf(setOf<String>()) }
     var path by remember { mutableStateOf<StudyPath?>(null) }
     var ratio by remember { mutableStateOf(StudySplitRatio.BALANCED) }
@@ -1211,7 +1208,7 @@ private fun StudyTab(
     isAdmin: Boolean,
     modifier: Modifier,
     onSelectSubject: (String) -> Unit,
-    onOpenCourse: (subjectId: String, courseId: String, title: String, bundled: Boolean) -> Unit,
+    onOpenCourse: (subjectId: String, courseId: String, title: String) -> Unit,
     onSaveSubject: (id: String, title: String) -> Unit,
     onSaveCourse: (
         subjectId: String,
@@ -1238,43 +1235,40 @@ private fun StudyTab(
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("최근 수업", style = MaterialTheme.typography.titleMedium)
         if (content.studyRecent.isEmpty()) {
-            TextButton(onClick = { onOpenCourse("cs", "cs-algo-intro-01", "번들 수업", true) }) {
-                Text("번들 수업으로 시작")
-            }
+            Text(STUDY_EMPTY_RECENT_MESSAGE, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             content.studyRecent.forEach { entry ->
-                TextButton(onClick = { onOpenCourse(entry.subjectId, entry.courseId, entry.title, false) }) {
+                TextButton(onClick = { onOpenCourse(entry.subjectId, entry.courseId, entry.title) }) {
                     Text(entry.title.ifBlank { entry.courseId })
                 }
             }
         }
 
         Text("과목 · 수업", style = MaterialTheme.typography.titleMedium)
-        val subjects = content.studySubjects.ifEmpty {
-            listOf(StudySubject("cs", "CS"))
-        }
-        subjects.forEach { subject ->
-            TextButton(onClick = { selectedSubject = subject.id }) {
-                Text(
-                    subject.title,
-                    color = if (selectedSubject == subject.id) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface,
-                )
+        if (content.studySubjects.isEmpty()) {
+            Text(STUDY_EMPTY_CATALOG_MESSAGE, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            content.studySubjects.forEach { subject ->
+                TextButton(onClick = { selectedSubject = subject.id }) {
+                    Text(
+                        subject.title,
+                        color = if (selectedSubject == subject.id) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             }
-        }
-        val courses = if (selectedSubject == null) emptyList() else content.studyCourses
-        if (selectedSubject != null && courses.isEmpty()) {
-            TextButton(onClick = { onOpenCourse(selectedSubject!!, "cs-algo-intro-01", "번들 수업", true) }) {
-                Text("번들 수업 (폴백)")
+            val courses = if (selectedSubject == null) emptyList() else content.studyCourses
+            if (selectedSubject != null && courses.isEmpty()) {
+                Text(STUDY_EMPTY_CATALOG_MESSAGE, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        }
-        courses.forEach { course ->
-            TextButton(
-                onClick = {
-                    onOpenCourse(selectedSubject ?: "cs", course.id, course.title, false)
-                },
-            ) {
-                Text(course.title)
+            courses.forEach { course ->
+                TextButton(
+                    onClick = {
+                        onOpenCourse(selectedSubject!!, course.id, course.title)
+                    },
+                ) {
+                    Text(course.title)
+                }
             }
         }
 

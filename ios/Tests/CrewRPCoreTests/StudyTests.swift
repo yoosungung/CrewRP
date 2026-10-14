@@ -225,6 +225,15 @@ struct StudyCatalogTests {
         #expect(shellDocsTabIndex == 3)
         #expect(shellTalkTabIndex == 4)
     }
+
+    @Test("study empty copy has no bundled fallback")
+    func emptyCopy() {
+        #expect(!studyEmptyRecentMessage.isEmpty)
+        #expect(!studyEmptyCatalogMessage.isEmpty)
+        #expect(!studyEmptyHomeSubtitle.isEmpty)
+        #expect(!studyEmptyRecentMessage.contains("번들"))
+        #expect(!studyEmptyCatalogMessage.contains("번들"))
+    }
 }
 
 @Suite("Study path")

@@ -92,13 +92,6 @@ public func recordRecentStudy(
     return trimmed
 }
 
-public func bundledStudyFallback() throws -> (StudySubject, StudyCourseSummary) {
-    let asset = try CourseAsset.loadBundled()
-    let subjectTitle = asset.course.subject.isEmpty ? "CS" : asset.course.subject
-    let subject = StudySubject(id: subjectTitle.lowercased(), title: subjectTitle)
-    return (subject, StudyCourseSummary(id: asset.course.id, title: asset.course.title))
-}
-
 public struct StudyCatalogClient: Sendable {
     public var transport: any HTTPTransport
     public var apiBase: URL

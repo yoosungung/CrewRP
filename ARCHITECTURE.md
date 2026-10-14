@@ -43,7 +43,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | 초대 | 초대 | Organization invitation | 이메일만 |
 | 홈 | 홈 | Contents `README.md` + Projects | 크루 소개는 repo 루트 README 렌더. **내 담당** 할 일(Issue assignees·미완료) + 오늘·다가오는 요약(탭하면 할 일 화면에서 해당 항목 열림). **이어서 할 공부**·흐려진 `ReviewCard` CTA(탭하면 학습). 고정 공지 목록은 두지 않는다 |
 | 할 일 | 할 일 / 댓글 / 담당 | Projects (v2), Issues | GraphQL로 칸반·납기. **담당자**는 Issue assignees(REST로 설정). **할 일별 댓글**은 연결된 Issue의 REST comments(목록·작성·수정·삭제). 소통 탭이 아님 |
-| 학습 | 최근 수업 / 과목·수업 / 과목 관리 | Contents `.crewrp/study/**` · 로컬 최근 목록 | 탭 본문: 최근 수업, 과목→수업 목록, (운영진만) 과목·수업 등록. 수업 탭 → §7 캔버스. 강좌 JSON 원본은 repo; 최근 수업·진도는 기기 로컬. LLM은 네이티브→Worker/BYOK |
+| 학습 | 최근 수업 / 과목·수업 / 과목 관리 | Contents `.crewrp/study/**` · 로컬 최근 목록 | 탭 본문: 최근 수업, 과목→수업 목록, (운영진만) 과목·수업 등록. repo·최근이 비면 빈 UI(번들 폴백 없음). 수업 탭 → §7 캔버스. 강좌 JSON 원본은 repo; 최근 수업·진도는 기기 로컬. LLM은 네이티브→Worker/BYOK |
 | 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` + Releases Assets | **문서**는 `docs/**/*.md`(필요 시 `.txt`) — Contents 목록·본문, Trees 검색, 인앱 마크다운 렌더/편집. **첨부**(이미지·PDF·기타)는 `crewrp-attachments` Release Assets — 업로드·목록·다운로드. 학습 강좌 JSON은 자료실에 두지 않는다(`.crewrp/study`). 본문에 넣을 때도 asset URL만. 범용 바이너리를 Contents에 올리지 않는다 |
 | 투표 참여 | 투표 | Discussion poll | 기존 poll 조회와 `addDiscussionPollVote`. 앱에서 poll 생성은 하지 않는다 |
 | 행정 서식 | 서식 | Issue Forms YAML, Issues | 앱이 `.github/ISSUE_TEMPLATE` YAML을 읽어 네이티브 폼을 그린 뒤 Issue를 생성 |
@@ -131,7 +131,7 @@ Worker가 구독하는 Webhook과 앱에 보이는 알림 이름:
 | `.crewrp/study/<subjectId>/<courseId>/concepts.json` | 배치 입력용 `ConceptMarker[]`(concept, startSec, slideLabel?) — 운영진 재생성용 |
 | `.crewrp/study/<subjectId>/<courseId>/source.vtt` | (선택) 자막 원본. 용량이 크면 생략 가능; 기기에만 두고 `course.json`만 커밋해도 된다 |
 
-**과정 만들기(배치)** 는 Cloudflare Worker가 아니라 **네이티브 코어**에서 한다: 자막(VTT/SRT) + `ConceptMarker[]` → `SourceSpan[]`(UniTutor `content/`와 동일 규칙). 운영진 앱이 결과를 Contents API로 커밋한다. 사용자 GitHub 토큰은 Worker에 저장하지 않는다. 1단계 `knowledgeEdges`는 span 순서 선형 DAG로 채우고, 비선형 편집은 후속이다. 번들 `cs-algo-intro-01`은 repo에 강좌가 없을 때의 폴백이다.
+**과정 만들기(배치)** 는 Cloudflare Worker가 아니라 **네이티브 코어**에서 한다: 자막(VTT/SRT) + `ConceptMarker[]` → `SourceSpan[]`(UniTutor `content/`와 동일 규칙). 운영진 앱이 결과를 Contents API로 커밋한다. 사용자 GitHub 토큰은 Worker에 저장하지 않는다. 1단계 `knowledgeEdges`는 span 순서 선형 DAG로 채우고, 비선형 편집은 후속이다. `CourseAsset.loadBundled()` / `cs-algo-intro-01`은 **단위 테스트·튜터 계약 픽스처**다. 학습 탭·홈 CTA·카탈로그 빈 상태에 넣지 않는다 — repo가 비면 빈 UI다.
 
 **최근 수업** 은 기기 로컬(SQLite 또는 동등)에 `(courseId, subjectId, openedAt)`만 둔다. 원본이 아니다.
 

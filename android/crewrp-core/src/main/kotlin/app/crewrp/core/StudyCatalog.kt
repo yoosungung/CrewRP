@@ -123,13 +123,6 @@ fun recordRecentStudy(
     return trimmed
 }
 
-/** 번들 폴백 한 줄(카탈로그 비어 있을 때). */
-fun bundledStudyFallback(): Pair<StudySubject, StudyCourseSummary> {
-    val asset = CourseAsset.loadBundled()
-    return StudySubject(asset.course.subject.ifBlank { "CS" }.lowercase(), asset.course.subject.ifBlank { "CS" }) to
-        StudyCourseSummary(asset.course.id, asset.course.title)
-}
-
 class StudyCatalogClient(
     private val transport: HttpTransport,
     private val apiBase: String = "https://api.github.com",

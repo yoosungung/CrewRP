@@ -130,6 +130,11 @@ const val SHELL_STUDY_TAB_INDEX = 2
 const val SHELL_DOCS_TAB_INDEX = 3
 const val SHELL_TALK_TAB_INDEX = 4
 
+/** 학습 탭·홈 CTA 빈 상태(번들 폴백 없음). */
+const val STUDY_EMPTY_RECENT_MESSAGE = "최근 수업이 없어요"
+const val STUDY_EMPTY_CATALOG_MESSAGE = "수업이 아직 없어요"
+const val STUDY_EMPTY_HOME_SUBTITLE = "학습에서 수업을 고르세요"
+
 fun taskMatching(id: String, tasks: List<TaskCard>): TaskCard? =
     tasks.firstOrNull { it.id == id }
 
