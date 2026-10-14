@@ -161,3 +161,54 @@ struct StudyCitationTests {
         #expect(asset.startSec(forCitation: "missing") == nil)
     }
 }
+
+@Suite("Study path")
+struct StudyPathTests {
+    @Test("bundled course has static knowledge DAG")
+    func bundledDag() throws {
+        let asset = try CourseAsset.loadBundled()
+        #expect(!asset.knowledgeEdges.isEmpty)
+        #expect(asset.knowledgeEdges.contains {
+            $0.fromSpanId == "span-what-is-algo" && $0.toSpanId == "span-peak-finding"
+        })
+    }
+
+    @Test("advisor onboarding skips known concepts and sets current")
+    func onboardingSkips() throws {
+        let asset = try CourseAsset.loadBundled()
+        let path = StudyPath.build(
+            spanIds: asset.spans.map(\.id),
+            knownSpanIds: ["span-what-is-algo"]
+        )
+        #expect(path.items[0].placement == .skipped)
+        #expect(path.items[1].placement == .current)
+        #expect(path.items[2].placement == .planned)
+        #expect(path.activeSpanId() == "span-peak-finding")
+    }
+
+    @Test("DetourInserted uses prerequisite and returns")
+    func detourRoundTrip() throws {
+        let asset = try CourseAsset.loadBundled()
+        var path = StudyPath.build(
+            spanIds: asset.spans.map(\.id),
+            knownSpanIds: ["span-what-is-algo"]
+        )
+        path = path.insertDetour(edges: asset.knowledgeEdges, stuckSpanId: "span-peak-finding")
+        let detour = try #require(path.items.first { $0.placement == .detour })
+        #expect(detour.sourceSpanId == "span-what-is-algo")
+        #expect(detour.returnToSpanId == "span-peak-finding")
+        #expect(path.activeSpanId() == "span-what-is-algo")
+
+        path = path.completeDetour()
+        #expect(path.items.allSatisfy { $0.placement != .detour })
+        #expect(path.activeSpanId() == "span-peak-finding")
+        #expect(path.items.first { $0.sourceSpanId == "span-peak-finding" }?.placement == .current)
+    }
+
+    @Test("insertDetour no-op without prerequisite")
+    func detourNoOp() {
+        let path = StudyPath.build(spanIds: ["a", "b"], knownSpanIds: [])
+        let same = path.insertDetour(edges: [], stuckSpanId: "a")
+        #expect(same.items == path.items)
+    }
+}

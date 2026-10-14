@@ -159,3 +159,55 @@ class StudyCitationTest {
         assertNotNull(asset.span(span.id))
     }
 }
+
+class StudyPathTest {
+    @Test
+    fun bundledCourseHasStaticKnowledgeDag() {
+        val asset = CourseAsset.loadBundled()
+        assertTrue(asset.knowledgeEdges.isNotEmpty())
+        assertTrue(
+            asset.knowledgeEdges.any {
+                it.fromSpanId == "span-what-is-algo" && it.toSpanId == "span-peak-finding"
+            },
+        )
+    }
+
+    @Test
+    fun advisorOnboardingSkipsKnownConceptsAndSetsCurrent() {
+        val asset = CourseAsset.loadBundled()
+        val path = StudyPath.build(
+            spanIds = asset.spans.map { it.id },
+            knownSpanIds = setOf("span-what-is-algo"),
+        )
+        assertEquals(PathPlacement.SKIPPED, path.items[0].placement)
+        assertEquals(PathPlacement.CURRENT, path.items[1].placement)
+        assertEquals(PathPlacement.PLANNED, path.items[2].placement)
+        assertEquals("span-peak-finding", path.activeSpanId())
+    }
+
+    @Test
+    fun detourInsertedUsesPrerequisiteAndReturns() {
+        val asset = CourseAsset.loadBundled()
+        var path = StudyPath.build(
+            spanIds = asset.spans.map { it.id },
+            knownSpanIds = setOf("span-what-is-algo"),
+        )
+        path = path.insertDetour(asset.knowledgeEdges, stuckSpanId = "span-peak-finding")
+        val detour = path.items.first { it.placement == PathPlacement.DETOUR }
+        assertEquals("span-what-is-algo", detour.sourceSpanId)
+        assertEquals("span-peak-finding", detour.returnToSpanId)
+        assertEquals("span-what-is-algo", path.activeSpanId())
+
+        path = path.completeDetour()
+        assertTrue(path.items.none { it.placement == PathPlacement.DETOUR })
+        assertEquals("span-peak-finding", path.activeSpanId())
+        assertEquals(PathPlacement.CURRENT, path.items.first { it.sourceSpanId == "span-peak-finding" }.placement)
+    }
+
+    @Test
+    fun insertDetourNoOpWithoutPrerequisite() {
+        val path = StudyPath.build(spanIds = listOf("a", "b"), knownSpanIds = emptySet())
+        val same = path.insertDetour(emptyList(), stuckSpanId = "a")
+        assertEquals(path.items, same.items)
+    }
+}

@@ -51,6 +51,99 @@ public struct PathItem: Sendable, Equatable, Codable {
     }
 }
 
+/// 지식 DAG 간선. `fromSpanId`가 `toSpanId`의 선수.
+public struct KnowledgeEdge: Sendable, Equatable, Codable {
+    public var fromSpanId: String
+    public var toSpanId: String
+
+    public init(fromSpanId: String, toSpanId: String) {
+        self.fromSpanId = fromSpanId
+        self.toSpanId = toSpanId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case fromSpanId = "from"
+        case toSpanId = "to"
+    }
+}
+
+/// Advisor 온보딩·detour를 담는 학습 경로.
+public struct StudyPath: Sendable, Equatable {
+    public var items: [PathItem]
+
+    public init(items: [PathItem]) {
+        self.items = items
+    }
+
+    public func activeSpanId() -> String? {
+        if let detour = items.first(where: { $0.placement == .detour }) {
+            return detour.sourceSpanId
+        }
+        return items.first(where: { $0.placement == .current })?.sourceSpanId
+    }
+
+    public func insertDetour(edges: [KnowledgeEdge], stuckSpanId: String) -> StudyPath {
+        if items.contains(where: { $0.placement == .detour }) { return self }
+        guard let prereq = edges.first(where: { $0.toSpanId == stuckSpanId })?.fromSpanId else {
+            return self
+        }
+        guard let stuckIdx = items.firstIndex(where: { $0.sourceSpanId == stuckSpanId }) else {
+            return self
+        }
+        var next = items
+        next.insert(
+            PathItem(sourceSpanId: prereq, placement: .detour, returnToSpanId: stuckSpanId),
+            at: stuckIdx
+        )
+        return StudyPath(items: next)
+    }
+
+    public func completeDetour() -> StudyPath {
+        guard let detour = items.first(where: { $0.placement == .detour }),
+              let returnId = detour.returnToSpanId else {
+            return self
+        }
+        let filtered = items.filter { $0.placement != .detour }.map { item -> PathItem in
+            if item.sourceSpanId == returnId {
+                return PathItem(sourceSpanId: item.sourceSpanId, placement: .current, returnToSpanId: item.returnToSpanId)
+            }
+            if item.placement == .current {
+                return PathItem(sourceSpanId: item.sourceSpanId, placement: .planned, returnToSpanId: item.returnToSpanId)
+            }
+            return item
+        }
+        return StudyPath(items: filtered)
+    }
+
+    public static func build(spanIds: [String], knownSpanIds: Set<String>) -> StudyPath {
+        var currentSet = false
+        let items = spanIds.map { id -> PathItem in
+            if knownSpanIds.contains(id) {
+                return PathItem(sourceSpanId: id, placement: .skipped)
+            }
+            if !currentSet {
+                currentSet = true
+                return PathItem(sourceSpanId: id, placement: .current)
+            }
+            return PathItem(sourceSpanId: id, placement: .planned)
+        }
+        return StudyPath(items: items)
+    }
+
+    public static func linearEdges(spanIds: [String]) -> [KnowledgeEdge] {
+        zip(spanIds, spanIds.dropFirst()).map { KnowledgeEdge(fromSpanId: $0.0, toSpanId: $0.1) }
+    }
+}
+
+public func pathPlacementLabel(_ placement: PathPlacement) -> String {
+    switch placement {
+    case .planned: "예정"
+    case .skipped: "건너뜀"
+    case .current: "오늘"
+    case .detour: "우회"
+    }
+}
+
 public enum TutorScope: String, Sendable, Equatable, Codable {
     case inLecture = "in_lecture"
     case outOfScope = "out_of_scope"
@@ -218,6 +311,7 @@ private struct CourseAssetDTO: Codable {
     var course: CourseRef
     var spans: [SourceSpan]
     var tutorPrompts: [TutorPromptDTO]?
+    var knowledgeEdges: [KnowledgeEdge]?
 }
 
 private struct TutorPromptDTO: Codable {
@@ -233,11 +327,18 @@ public struct CourseAsset: Sendable, Equatable {
     public var course: CourseRef
     public var spans: [SourceSpan]
     public var tutorPrompts: [BundledTutorPrompt]
+    public var knowledgeEdges: [KnowledgeEdge]
 
-    public init(course: CourseRef, spans: [SourceSpan], tutorPrompts: [BundledTutorPrompt] = []) {
+    public init(
+        course: CourseRef,
+        spans: [SourceSpan],
+        tutorPrompts: [BundledTutorPrompt] = [],
+        knowledgeEdges: [KnowledgeEdge] = []
+    ) {
         self.course = course
         self.spans = spans
         self.tutorPrompts = tutorPrompts
+        self.knowledgeEdges = knowledgeEdges
     }
 
     public func span(id: String) -> SourceSpan? {
@@ -272,7 +373,9 @@ public struct CourseAsset: Sendable, Equatable {
                 scope: $0.scope ?? .inLecture
             )
         }
-        return CourseAsset(course: dto.course, spans: dto.spans, tutorPrompts: prompts)
+        let edges = dto.knowledgeEdges ?? []
+        let resolved = edges.isEmpty ? StudyPath.linearEdges(spanIds: dto.spans.map(\.id)) : edges
+        return CourseAsset(course: dto.course, spans: dto.spans, tutorPrompts: prompts, knowledgeEdges: resolved)
     }
 
     public static func loadBundled() throws -> CourseAsset {
@@ -399,6 +502,10 @@ enum BundledStudyJSON {
           "endSec": 1500,
           "slideLabel": "Asymptotic notation"
         }
+      ],
+      "knowledgeEdges": [
+        {"from": "span-what-is-algo", "to": "span-peak-finding"},
+        {"from": "span-peak-finding", "to": "span-asymptotic"}
       ],
       "tutorPrompts": [
         {

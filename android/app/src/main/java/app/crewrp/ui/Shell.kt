@@ -45,6 +45,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -130,7 +131,9 @@ import app.crewrp.core.DocBlock
 import app.crewrp.core.DocEntry
 import app.crewrp.core.DocsLibraryItem
 import app.crewrp.core.Notice
+import app.crewrp.core.PathPlacement
 import app.crewrp.core.Session
+import app.crewrp.core.StudyPath
 import app.crewrp.core.StudySplitRatio
 import app.crewrp.core.TaskCard
 import app.crewrp.core.TaskLane
@@ -154,6 +157,7 @@ import app.crewrp.core.listedLibrary
 import app.crewrp.core.normalizeAssigneeLogin
 import app.crewrp.core.parentDocsPath
 import app.crewrp.core.parseDueOnDate
+import app.crewrp.core.pathPlacementLabel
 import app.crewrp.core.roleLabel
 import app.crewrp.core.studyCanvasStacksVertically
 import app.crewrp.core.taskAssigneeLabel
@@ -1038,18 +1042,26 @@ private fun HomeTab(
 @Composable
 private fun StudyCanvasScreen(onClose: () -> Unit) {
     val asset = remember { runCatching { CourseAsset.loadBundled() }.getOrNull() }
+    var known by remember { mutableStateOf(setOf<String>()) }
+    var path by remember { mutableStateOf<StudyPath?>(null) }
     var ratio by remember { mutableStateOf(StudySplitRatio.BALANCED) }
-    var playUrl by remember { mutableStateOf(asset?.course?.playbackUrl.orEmpty()) }
+    var playUrl by remember { mutableStateOf("") }
     var escalation by remember { mutableIntStateOf(1) }
-    var turn by remember {
-        mutableStateOf(
-            asset?.let {
-                runCatching { BundledTutorClient(it).turn(it.spans.first().id, 1) }.getOrNull()
-            },
-        )
-    }
+    var turn by remember { mutableStateOf<TutorTurn?>(null) }
     var draft by remember { mutableStateOf("") }
     var thoughtExpanded by remember { mutableStateOf(false) }
+
+    fun syncToActive(next: StudyPath) {
+        if (asset == null) return
+        path = next
+        val spanId = next.activeSpanId() ?: return
+        val start = asset.startSecForCitation(spanId)
+        playUrl = embedPlaybackUrl(asset.course.playbackUrl, start)
+        escalation = 1
+        turn = BundledTutorClient(asset).turn(spanId, 1)
+        draft = ""
+        thoughtExpanded = false
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -1070,74 +1082,127 @@ private fun StudyCanvasScreen(onClose: () -> Unit) {
             Text("강의를 불러오지 못했습니다.", Modifier.padding(16.dp))
             return
         }
+        if (path == null) {
+            StudyOnboardingPane(
+                asset = asset,
+                known = known,
+                onToggle = { id ->
+                    known = if (id in known) known - id else known + id
+                },
+                onStart = {
+                    syncToActive(
+                        StudyPath.build(
+                            spanIds = asset.spans.map { it.id },
+                            knownSpanIds = known,
+                        ),
+                    )
+                },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+            return
+        }
+        val activePath = path!!
+        StudyPathStrip(asset = asset, path = activePath, Modifier.fillMaxWidth().padding(horizontal = 12.dp))
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val vertical = studyCanvasStacksVertically(maxWidth.value.toDouble(), maxHeight.value.toDouble())
             val mediaW = ratio.mediaWeight.toFloat()
             val tutorW = ratio.tutorWeight.toFloat()
             val total = mediaW + tutorW
+            val onDetour = activePath.items.any { it.placement == PathPlacement.DETOUR }
+            val tutor: @Composable (Modifier: Modifier) -> Unit = { mod ->
+                StudyTutorPane(
+                    asset = asset,
+                    turn = turn,
+                    draft = draft,
+                    thoughtExpanded = thoughtExpanded,
+                    onDetour = onDetour,
+                    onDraft = { draft = it },
+                    onThought = { thoughtExpanded = it },
+                    onHint = {
+                        escalation = (escalation + 1).coerceAtMost(3)
+                        val spanId = turn?.sourceSpanId ?: activePath.activeSpanId() ?: asset.spans.first().id
+                        turn = BundledTutorClient(asset).turn(spanId, escalation)
+                    },
+                    onAsk = {
+                        escalation = 1
+                        val spanId = turn?.sourceSpanId ?: activePath.activeSpanId() ?: asset.spans.first().id
+                        turn = BundledTutorClient(asset).turn(spanId, 1)
+                    },
+                    onCite = { spanId ->
+                        val start = asset.startSecForCitation(spanId) ?: return@StudyTutorPane
+                        playUrl = embedPlaybackUrl(asset.course.playbackUrl, start)
+                        escalation = 1
+                        turn = BundledTutorClient(asset).turn(spanId, 1)
+                        draft = ""
+                    },
+                    onStuck = {
+                        val stuck = activePath.activeSpanId() ?: return@StudyTutorPane
+                        syncToActive(activePath.insertDetour(asset.knowledgeEdges, stuck))
+                    },
+                    onCompleteDetour = {
+                        syncToActive(activePath.completeDetour())
+                    },
+                    modifier = mod,
+                )
+            }
             if (vertical) {
                 Column(Modifier.fillMaxSize()) {
                     StudyMediaPane(playUrl, Modifier.fillMaxWidth().weight(mediaW / total))
                     StudySplitHandle(ratio) { ratio = it }
-                    StudyTutorPane(
-                        asset = asset,
-                        turn = turn,
-                        draft = draft,
-                        thoughtExpanded = thoughtExpanded,
-                        onDraft = { draft = it },
-                        onThought = { thoughtExpanded = it },
-                        onHint = {
-                            escalation = (escalation + 1).coerceAtMost(3)
-                            val spanId = turn?.sourceSpanId ?: asset.spans.first().id
-                            turn = BundledTutorClient(asset).turn(spanId, escalation)
-                        },
-                        onAsk = {
-                            escalation = 1
-                            val spanId = turn?.sourceSpanId ?: asset.spans.first().id
-                            turn = BundledTutorClient(asset).turn(spanId, 1)
-                        },
-                        onCite = { spanId ->
-                            val start = asset.startSecForCitation(spanId) ?: return@StudyTutorPane
-                            playUrl = embedPlaybackUrl(asset.course.playbackUrl, start)
-                            escalation = 1
-                            turn = BundledTutorClient(asset).turn(spanId, 1)
-                            draft = ""
-                        },
-                        modifier = Modifier.fillMaxWidth().weight(tutorW / total),
-                    )
+                    tutor(Modifier.fillMaxWidth().weight(tutorW / total))
                 }
             } else {
                 Row(Modifier.fillMaxSize()) {
                     StudyMediaPane(playUrl, Modifier.fillMaxHeight().weight(mediaW / total))
                     StudySplitHandle(ratio) { ratio = it }
-                    StudyTutorPane(
-                        asset = asset,
-                        turn = turn,
-                        draft = draft,
-                        thoughtExpanded = thoughtExpanded,
-                        onDraft = { draft = it },
-                        onThought = { thoughtExpanded = it },
-                        onHint = {
-                            escalation = (escalation + 1).coerceAtMost(3)
-                            val spanId = turn?.sourceSpanId ?: asset.spans.first().id
-                            turn = BundledTutorClient(asset).turn(spanId, escalation)
-                        },
-                        onAsk = {
-                            escalation = 1
-                            val spanId = turn?.sourceSpanId ?: asset.spans.first().id
-                            turn = BundledTutorClient(asset).turn(spanId, 1)
-                        },
-                        onCite = { spanId ->
-                            val start = asset.startSecForCitation(spanId) ?: return@StudyTutorPane
-                            playUrl = embedPlaybackUrl(asset.course.playbackUrl, start)
-                            escalation = 1
-                            turn = BundledTutorClient(asset).turn(spanId, 1)
-                            draft = ""
-                        },
-                        modifier = Modifier.fillMaxHeight().weight(tutorW / total),
-                    )
+                    tutor(Modifier.fillMaxHeight().weight(tutorW / total))
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun StudyOnboardingPane(
+    asset: CourseAsset,
+    known: Set<String>,
+    onToggle: (String) -> Unit,
+    onStart: () -> Unit,
+    modifier: Modifier,
+) {
+    Column(
+        modifier.padding(16.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("이미 아는 개념을 고르면 경로에서 건너뜁니다.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        asset.spans.forEach { span ->
+            Row(
+                Modifier.fillMaxWidth().clickable { onToggle(span.id) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = span.id in known, onCheckedChange = { onToggle(span.id) })
+                Text(span.concept, Modifier.padding(start = 8.dp))
+            }
+        }
+        Button(onClick = onStart, modifier = Modifier.fillMaxWidth()) { Text("첫 주 경로 보기") }
+    }
+}
+
+@Composable
+private fun StudyPathStrip(asset: CourseAsset, path: StudyPath, modifier: Modifier = Modifier) {
+    Column(modifier.padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("경로", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        path.items.forEach { item ->
+            val concept = asset.span(item.sourceSpanId)?.concept ?: item.sourceSpanId
+            Text(
+                "${pathPlacementLabel(item.placement)} · $concept",
+                style = MaterialTheme.typography.bodySmall,
+                color = when (item.placement) {
+                    PathPlacement.CURRENT, PathPlacement.DETOUR -> MaterialTheme.colorScheme.primary
+                    PathPlacement.SKIPPED -> MaterialTheme.colorScheme.onSurfaceVariant
+                    PathPlacement.PLANNED -> MaterialTheme.colorScheme.onSurface
+                },
+            )
         }
     }
 }
@@ -1249,11 +1314,14 @@ private fun StudyTutorPane(
     turn: TutorTurn?,
     draft: String,
     thoughtExpanded: Boolean,
+    onDetour: Boolean,
     onDraft: (String) -> Unit,
     onThought: (Boolean) -> Unit,
     onHint: () -> Unit,
     onAsk: () -> Unit,
     onCite: (String) -> Unit,
+    onStuck: () -> Unit,
+    onCompleteDetour: () -> Unit,
     modifier: Modifier,
 ) {
     Column(modifier.padding(12.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1287,6 +1355,11 @@ private fun StudyTutorPane(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onHint) { Text("힌트") }
             Button(onClick = onAsk) { Text("이 장면 질문") }
+        }
+        if (onDetour) {
+            Button(onClick = onCompleteDetour) { Text("우회 끝 · 돌아가기") }
+        } else {
+            TextButton(onClick = onStuck) { Text("막혀요 · 앞 장면") }
         }
     }
 }
