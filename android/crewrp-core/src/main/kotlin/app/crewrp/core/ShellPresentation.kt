@@ -124,8 +124,11 @@ fun taskAssigneeLabel(assignees: List<String>): String? {
     return names.joinToString(", ") { "@$it" }
 }
 
-/** NavigationBar에서 할 일 탭 인덱스. */
+/** NavigationBar 탭 인덱스: 홈·할 일·학습·자료실·소통. */
 const val SHELL_TASKS_TAB_INDEX = 1
+const val SHELL_STUDY_TAB_INDEX = 2
+const val SHELL_DOCS_TAB_INDEX = 3
+const val SHELL_TALK_TAB_INDEX = 4
 
 fun taskMatching(id: String, tasks: List<TaskCard>): TaskCard? =
     tasks.firstOrNull { it.id == id }

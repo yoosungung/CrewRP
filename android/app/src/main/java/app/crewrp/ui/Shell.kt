@@ -37,10 +37,12 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -131,10 +133,14 @@ import app.crewrp.core.DocBlock
 import app.crewrp.core.DocEntry
 import app.crewrp.core.DocsLibraryItem
 import app.crewrp.core.Notice
+import app.crewrp.core.ConceptMarker
 import app.crewrp.core.PathPlacement
+import app.crewrp.core.RecentStudyEntry
 import app.crewrp.core.Session
+import app.crewrp.core.StudyCourseSummary
 import app.crewrp.core.StudyPath
 import app.crewrp.core.StudySplitRatio
+import app.crewrp.core.StudySubject
 import app.crewrp.core.TaskCard
 import app.crewrp.core.TaskLane
 import app.crewrp.core.TeamRole
@@ -150,6 +156,9 @@ import app.crewrp.core.embedPlaybackUrl
 import app.crewrp.core.youtubeEmbedHtml
 import app.crewrp.core.formatDue
 import app.crewrp.core.formatDueOnDate
+import app.crewrp.core.SHELL_DOCS_TAB_INDEX
+import app.crewrp.core.SHELL_STUDY_TAB_INDEX
+import app.crewrp.core.SHELL_TALK_TAB_INDEX
 import app.crewrp.core.SHELL_TASKS_TAB_INDEX
 import app.crewrp.core.homeSections
 import app.crewrp.core.kanbanUsesStackedLanes
@@ -217,6 +226,17 @@ data class CrewActions(
     val onPostBoardComment: (discussionId: String, body: String) -> Unit,
     val onUpdateBoardComment: (commentId: String, body: String) -> Unit,
     val onDeleteBoardComment: (commentId: String) -> Unit,
+    val onLoadStudyCourses: (subjectId: String) -> Unit,
+    val onOpenStudyCourse: (subjectId: String, courseId: String, title: String, bundled: Boolean) -> Unit,
+    val onSaveStudySubject: (id: String, title: String) -> Unit,
+    val onSaveStudyCourse: (
+        subjectId: String,
+        courseId: String,
+        title: String,
+        playbackUrl: String,
+        markers: List<ConceptMarker>,
+        vttText: String,
+    ) -> Unit,
 )
 
 private data class Destination(val label: String, val selectedIcon: ImageVector, val icon: ImageVector)
@@ -224,6 +244,7 @@ private data class Destination(val label: String, val selectedIcon: ImageVector,
 private val destinations = listOf(
     Destination("홈", Icons.Filled.Home, Icons.Outlined.Home),
     Destination("할 일", Icons.Filled.CheckCircle, Icons.Outlined.CheckCircle),
+    Destination("학습", Icons.Filled.MenuBook, Icons.Outlined.MenuBook),
     Destination("자료실", Icons.Filled.Folder, Icons.Outlined.Folder),
     Destination("소통", Icons.AutoMirrored.Filled.Chat, Icons.AutoMirrored.Outlined.Chat),
 )
@@ -322,13 +343,14 @@ fun CrewShell(
     onSaveDiscordSettings: () -> Unit,
     onLoadCrewSettings: () -> Unit,
     onLogout: () -> Unit,
+    studyAsset: CourseAsset? = null,
+    onCloseStudy: () -> Unit = {},
 ) {
     var tab by remember { mutableIntStateOf(0) }
     var compose by remember { mutableStateOf<ComposeKind?>(null) }
     var editingNotice by remember { mutableStateOf<Notice?>(null) }
     var editingTask by remember { mutableStateOf<TaskCard?>(null) }
     var pendingOpenTaskId by remember { mutableStateOf<String?>(null) }
-    var studyOpen by remember { mutableStateOf(false) }
     var viewingDoc by remember { mutableStateOf(false) }
     var docsAddMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -346,7 +368,7 @@ fun CrewShell(
     val name = crewDisplayName(session.repo)
 
     LaunchedEffect(tab) {
-        if (tab == 3) onLoadCrewSettings()
+        if (tab == SHELL_TALK_TAB_INDEX) onLoadCrewSettings()
     }
     LaunchedEffect(tab, pendingOpenTaskId, content.tasks) {
         val id = pendingOpenTaskId ?: return@LaunchedEffect
@@ -375,10 +397,10 @@ fun CrewShell(
         },
         floatingActionButton = {
             when (tab) {
-                1 -> FloatingActionButton(onClick = { compose = ComposeKind.Task }) {
+                SHELL_TASKS_TAB_INDEX -> FloatingActionButton(onClick = { compose = ComposeKind.Task }) {
                     Icon(Icons.Filled.Add, contentDescription = "작성")
                 }
-                2 -> Box {
+                SHELL_DOCS_TAB_INDEX -> Box {
                     FloatingActionButton(onClick = { docsAddMenu = true }) {
                         Icon(Icons.Filled.Add, contentDescription = "추가")
                     }
@@ -399,7 +421,7 @@ fun CrewShell(
                         )
                     }
                 }
-                3 -> if (content.selectedCategory != null) {
+                SHELL_TALK_TAB_INDEX -> if (content.selectedCategory != null) {
                     FloatingActionButton(onClick = { compose = ComposeKind.BoardPost }) {
                         Icon(Icons.Filled.Add, contentDescription = "글 작성")
                     }
@@ -438,10 +460,29 @@ fun CrewShell(
                         pendingOpenTaskId = task.id
                         tab = SHELL_TASKS_TAB_INDEX
                     },
-                    onOpenStudy = { studyOpen = true },
+                    onOpenStudy = {
+                        tab = SHELL_STUDY_TAB_INDEX
+                        val recent = content.studyRecent.firstOrNull()
+                        if (recent != null) {
+                            actions.onOpenStudyCourse(recent.subjectId, recent.courseId, recent.title, false)
+                        } else {
+                            actions.onOpenStudyCourse("cs", "cs-algo-intro-01", "공부", true)
+                        }
+                    },
                 )
-                1 -> TasksTab(content, Modifier.weight(1f), onRefresh, onOpen = { editingTask = it })
-                2 -> DocsTab(
+                SHELL_TASKS_TAB_INDEX -> TasksTab(content, Modifier.weight(1f), onRefresh, onOpen = { editingTask = it })
+                SHELL_STUDY_TAB_INDEX -> StudyTab(
+                    content = content,
+                    isAdmin = isAdmin,
+                    modifier = Modifier.weight(1f),
+                    onSelectSubject = actions.onLoadStudyCourses,
+                    onOpenCourse = { subjectId, courseId, title, bundled ->
+                        actions.onOpenStudyCourse(subjectId, courseId, title, bundled)
+                    },
+                    onSaveSubject = actions.onSaveStudySubject,
+                    onSaveCourse = actions.onSaveStudyCourse,
+                )
+                SHELL_DOCS_TAB_INDEX -> DocsTab(
                     content,
                     Modifier.weight(1f),
                     onRefresh,
@@ -550,13 +591,13 @@ fun CrewShell(
         )
     }
 
-    if (studyOpen) {
+    if (studyAsset != null) {
         Dialog(
-            onDismissRequest = { studyOpen = false },
+            onDismissRequest = onCloseStudy,
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
-            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                StudyCanvasScreen(onClose = { studyOpen = false })
+            Surface(Modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                StudyCanvasScreen(initialAsset = studyAsset, onClose = onCloseStudy)
             }
         }
     }
@@ -1040,8 +1081,10 @@ private fun HomeTab(
 }
 
 @Composable
-private fun StudyCanvasScreen(onClose: () -> Unit) {
-    val asset = remember { runCatching { CourseAsset.loadBundled() }.getOrNull() }
+private fun StudyCanvasScreen(onClose: () -> Unit, initialAsset: CourseAsset? = null) {
+    val asset = remember(initialAsset) {
+        initialAsset ?: runCatching { CourseAsset.loadBundled() }.getOrNull()
+    }
     var known by remember { mutableStateOf(setOf<String>()) }
     var path by remember { mutableStateOf<StudyPath?>(null) }
     var ratio by remember { mutableStateOf(StudySplitRatio.BALANCED) }
@@ -1158,6 +1201,132 @@ private fun StudyCanvasScreen(onClose: () -> Unit) {
                     tutor(Modifier.fillMaxHeight().weight(tutorW / total))
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun StudyTab(
+    content: CrewContent,
+    isAdmin: Boolean,
+    modifier: Modifier,
+    onSelectSubject: (String) -> Unit,
+    onOpenCourse: (subjectId: String, courseId: String, title: String, bundled: Boolean) -> Unit,
+    onSaveSubject: (id: String, title: String) -> Unit,
+    onSaveCourse: (
+        subjectId: String,
+        courseId: String,
+        title: String,
+        playbackUrl: String,
+        markers: List<ConceptMarker>,
+        vttText: String,
+    ) -> Unit,
+) {
+    var selectedSubject by remember { mutableStateOf<String?>(null) }
+    var subjectTitle by remember { mutableStateOf("") }
+    var subjectId by remember { mutableStateOf("") }
+    var courseId by remember { mutableStateOf("") }
+    var courseTitle by remember { mutableStateOf("") }
+    var playbackUrl by remember { mutableStateOf("") }
+    var markersText by remember { mutableStateOf("0\t도입") }
+    var vttText by remember { mutableStateOf("WEBVTT\n\n00:00:00.000 --> 00:01:00.000\nhello\n") }
+
+    LaunchedEffect(selectedSubject) {
+        selectedSubject?.let { onSelectSubject(it) }
+    }
+
+    Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("최근 수업", style = MaterialTheme.typography.titleMedium)
+        if (content.studyRecent.isEmpty()) {
+            TextButton(onClick = { onOpenCourse("cs", "cs-algo-intro-01", "번들 수업", true) }) {
+                Text("번들 수업으로 시작")
+            }
+        } else {
+            content.studyRecent.forEach { entry ->
+                TextButton(onClick = { onOpenCourse(entry.subjectId, entry.courseId, entry.title, false) }) {
+                    Text(entry.title.ifBlank { entry.courseId })
+                }
+            }
+        }
+
+        Text("과목 · 수업", style = MaterialTheme.typography.titleMedium)
+        val subjects = content.studySubjects.ifEmpty {
+            listOf(StudySubject("cs", "CS"))
+        }
+        subjects.forEach { subject ->
+            TextButton(onClick = { selectedSubject = subject.id }) {
+                Text(
+                    subject.title,
+                    color = if (selectedSubject == subject.id) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+        val courses = if (selectedSubject == null) emptyList() else content.studyCourses
+        if (selectedSubject != null && courses.isEmpty()) {
+            TextButton(onClick = { onOpenCourse(selectedSubject!!, "cs-algo-intro-01", "번들 수업", true) }) {
+                Text("번들 수업 (폴백)")
+            }
+        }
+        courses.forEach { course ->
+            TextButton(
+                onClick = {
+                    onOpenCourse(selectedSubject ?: "cs", course.id, course.title, false)
+                },
+            ) {
+                Text(course.title)
+            }
+        }
+
+        if (isAdmin) {
+            Text("과목 관리", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(subjectId, { subjectId = it }, label = { Text("과목 id") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(subjectTitle, { subjectTitle = it }, label = { Text("과목 이름") }, modifier = Modifier.fillMaxWidth())
+            Button(
+                onClick = {
+                    if (subjectId.isNotBlank() && subjectTitle.isNotBlank()) {
+                        onSaveSubject(subjectId.trim(), subjectTitle.trim())
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("과목 저장") }
+
+            Text("수업 만들기", style = MaterialTheme.typography.titleSmall)
+            OutlinedTextField(
+                selectedSubject ?: subjectId,
+                { selectedSubject = it },
+                label = { Text("과목 id") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(courseId, { courseId = it }, label = { Text("수업 id") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(courseTitle, { courseTitle = it }, label = { Text("수업 제목") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(playbackUrl, { playbackUrl = it }, label = { Text("재생 URL") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(
+                markersText,
+                { markersText = it },
+                label = { Text("개념 마커 (초\\t이름)") },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
+            )
+            OutlinedTextField(
+                vttText,
+                { vttText = it },
+                label = { Text("자막 (VTT)") },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
+            )
+            Button(
+                onClick = {
+                    val sid = (selectedSubject ?: subjectId).trim()
+                    if (sid.isBlank() || courseId.isBlank()) return@Button
+                    val markers = markersText.lines().mapNotNull { line ->
+                        val parts = line.split('\t', ',', '|').map { it.trim() }.filter { it.isNotEmpty() }
+                        if (parts.size < 2) return@mapNotNull null
+                        val sec = parts[0].toIntOrNull() ?: return@mapNotNull null
+                        ConceptMarker(parts[1], sec, parts.getOrNull(2) ?: "")
+                    }
+                    onSaveCourse(sid, courseId.trim(), courseTitle.trim().ifBlank { courseId.trim() }, playbackUrl.trim(), markers, vttText)
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("수업 저장") }
         }
     }
 }

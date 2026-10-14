@@ -35,6 +35,24 @@ import app.crewrp.core.DiscordLinkFlow
 import app.crewrp.core.PendingLogin
 import app.crewrp.core.PendingLoginStore
 import app.crewrp.core.Session
+import app.crewrp.core.CourseAsset
+import app.crewrp.core.CourseRef
+import app.crewrp.core.StudyCatalogClient
+import app.crewrp.core.StudyCourseSummary
+import app.crewrp.core.StudySubject
+import app.crewrp.core.buildCourseAssetFromBatch
+import app.crewrp.core.conceptMarkersToJson
+import app.crewrp.core.courseAssetPath
+import app.crewrp.core.courseSummariesToJson
+import app.crewrp.core.coursesPath
+import app.crewrp.core.parseCourseSummariesJson
+import app.crewrp.core.parseSubjectsJson
+import app.crewrp.core.recordRecentStudy
+import app.crewrp.core.subjectsPath
+import app.crewrp.core.subjectsToJson
+import app.crewrp.core.conceptsPath
+import app.crewrp.core.toJson
+import app.crewrp.core.RecentStudyEntry
 import app.crewrp.core.TeamRole
 import app.crewrp.core.TokenStore
 import app.crewrp.core.UrlHttpTransport
@@ -157,6 +175,7 @@ class MainActivity : ComponentActivity() {
             var refreshTick by remember { mutableIntStateOf(0) }
             var loadId by remember { mutableIntStateOf(0) }
             var deviceRegistered by remember { mutableStateOf(false) }
+            var studyAsset by remember { mutableStateOf<CourseAsset?>(null) }
 
             fun loadCrewSettings(activeSession: Session) {
                 val token = tokens.loadAccessToken() ?: return
@@ -231,6 +250,9 @@ class MainActivity : ComponentActivity() {
                             doc = previous.doc,
                             docPath = previous.docPath,
                             docSha = previous.docSha,
+                            studyCourses = previous.studyCourses,
+                            studyRecent = loaded.studyRecent.ifEmpty { previous.studyRecent },
+                            studySubjects = loaded.studySubjects.ifEmpty { previous.studySubjects },
                         )
                     }
                 }
@@ -505,6 +527,128 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 },
+
+                                onLoadStudyCourses = { subjectId ->
+                                    val token = tokens.loadAccessToken() ?: return@CrewActions
+                                    val parts = active.repo.split("/")
+                                    if (parts.size != 2) return@CrewActions
+                                    thread {
+                                        val courses = runCatching {
+                                            StudyCatalogClient(transport).listCourses(parts[0], parts[1], subjectId, token)
+                                        }.getOrDefault(emptyList())
+                                        runOnUiThread {
+                                            content = content.copy(studyCourses = courses)
+                                        }
+                                    }
+                                },
+                                onOpenStudyCourse = { subjectId, courseId, title, bundled ->
+                                    val token = tokens.loadAccessToken()
+                                    thread {
+                                        val asset = if (bundled || token == null) {
+                                            runCatching { CourseAsset.loadBundled() }.getOrNull()
+                                        } else {
+                                            val parts = active.repo.split("/")
+                                            if (parts.size != 2) null
+                                            else runCatching {
+                                                StudyCatalogClient(transport).loadCourseAsset(
+                                                    parts[0], parts[1], subjectId, courseId, token,
+                                                ) ?: CourseAsset.loadBundled()
+                                            }.getOrNull()
+                                        }
+                                        if (asset != null) {
+                                            runCatching {
+                                                recordRecentStudy(
+                                                    cache,
+                                                    RecentStudyEntry(
+                                                        subjectId,
+                                                        courseId,
+                                                        title.ifBlank { asset.course.title },
+                                                        System.currentTimeMillis() / 1000,
+                                                    ),
+                                                )
+                                            }
+                                            runOnUiThread {
+                                                studyAsset = asset
+                                                content = content.copy(studyRecent = app.crewrp.core.loadRecentStudy(cache))
+                                            }
+                                        }
+                                    }
+                                },
+                                onSaveStudySubject = { id, title ->
+                                    val token = tokens.loadAccessToken() ?: return@CrewActions
+                                    val parts = active.repo.split("/")
+                                    if (parts.size != 2) return@CrewActions
+                                    thread {
+                                        runCatching {
+                                            val client = StudyCatalogClient(transport)
+                                            val existing = client.fetchText(parts[0], parts[1], subjectsPath(), token)
+                                            val list = existing?.first?.let { parseSubjectsJson(it) }.orEmpty().toMutableList()
+                                            val idx = list.indexOfFirst { it.id == id }
+                                            if (idx >= 0) list[idx] = StudySubject(id, title) else list += StudySubject(id, title)
+                                            client.putText(
+                                                parts[0], parts[1], subjectsPath(), subjectsToJson(list), token, existing?.second,
+                                            )
+                                            list
+                                        }.onSuccess { list ->
+                                            runOnUiThread {
+                                                content = content.copy(studySubjects = list, writeError = null)
+                                            }
+                                        }.onFailure { err ->
+                                            runOnUiThread {
+                                                content = content.copy(writeError = writeFailureMessage(err.message ?: err.toString()))
+                                            }
+                                        }
+                                    }
+                                },
+                                onSaveStudyCourse = { subjectId, courseId, title, playbackUrl, markers, vttText ->
+                                    val token = tokens.loadAccessToken() ?: return@CrewActions
+                                    val parts = active.repo.split("/")
+                                    if (parts.size != 2) return@CrewActions
+                                    thread {
+                                        runCatching {
+                                            val client = StudyCatalogClient(transport)
+                                            val course = CourseRef(
+                                                courseId,
+                                                title,
+                                                subjectId,
+                                                playbackUrl.ifBlank { "https://www.youtube.com/embed/HtSuA80QTyo" },
+                                            )
+                                            val asset = buildCourseAssetFromBatch(course, markers, vttText)
+                                            val courseJson = asset.toJson() + "\n"
+                                            val existingAsset = client.fetchText(
+                                                parts[0], parts[1], courseAssetPath(subjectId, courseId), token,
+                                            )
+                                            client.putText(
+                                                parts[0], parts[1], courseAssetPath(subjectId, courseId),
+                                                courseJson, token, existingAsset?.second,
+                                            )
+                                            client.putText(
+                                                parts[0], parts[1], conceptsPath(subjectId, courseId),
+                                                conceptMarkersToJson(markers) + "\n", token,
+                                                client.fetchText(parts[0], parts[1], conceptsPath(subjectId, courseId), token)?.second,
+                                            )
+                                            val coursesFile = client.fetchText(parts[0], parts[1], coursesPath(subjectId), token)
+                                            val courses = coursesFile?.first?.let { parseCourseSummariesJson(it) }.orEmpty().toMutableList()
+                                            val cidx = courses.indexOfFirst { it.id == courseId }
+                                            val summary = StudyCourseSummary(courseId, title)
+                                            if (cidx >= 0) courses[cidx] = summary else courses += summary
+                                            client.putText(
+                                                parts[0], parts[1], coursesPath(subjectId),
+                                                courseSummariesToJson(courses), token, coursesFile?.second,
+                                            )
+                                            courses
+                                        }.onSuccess { courses ->
+                                            runOnUiThread {
+                                                content = content.copy(studyCourses = courses, writeError = null)
+                                            }
+                                        }.onFailure { err ->
+                                            Log.e("CrewRP", "study save failed", err)
+                                            runOnUiThread {
+                                                content = content.copy(writeError = writeFailureMessage(err.message ?: err.toString()))
+                                            }
+                                        }
+                                    }
+                                },
                             ),
                             onRefresh = { refreshTick += 1 },
                             onLinkDiscord = {
@@ -573,7 +717,10 @@ class MainActivity : ComponentActivity() {
                                 channelDraft = ""
                                 error = null
                                 deviceRegistered = false
+                                studyAsset = null
                             },
+                            studyAsset = studyAsset,
+                            onCloseStudy = { studyAsset = null },
                         )
                     }
                     repos.isNotEmpty() -> CrewStartScreen(

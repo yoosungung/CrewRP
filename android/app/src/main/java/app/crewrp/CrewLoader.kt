@@ -13,12 +13,17 @@ import app.crewrp.core.GraphQLFreshness
 import app.crewrp.core.Notice
 import app.crewrp.core.ProjectFieldMeta
 import app.crewrp.core.ProjectsClient
+import app.crewrp.core.RecentStudyEntry
 import app.crewrp.core.ReleaseAssetClient
 import app.crewrp.core.Session
+import app.crewrp.core.StudyCatalogClient
+import app.crewrp.core.StudyCourseSummary
+import app.crewrp.core.StudySubject
 import app.crewrp.core.TaskCard
 import app.crewrp.core.ThreadMessage
 import app.crewrp.core.ThreadTalkClient
 import app.crewrp.core.UrlHttpTransport
+import app.crewrp.core.loadRecentStudy
 import app.crewrp.core.normalizeAssigneeLogin
 import app.crewrp.core.taskLane
 import java.util.concurrent.Callable
@@ -49,6 +54,9 @@ data class CrewContent(
     val currentLogin: String? = null,
     val loading: Boolean = false,
     val writeError: String? = null,
+    val studySubjects: List<StudySubject> = emptyList(),
+    val studyCourses: List<StudyCourseSummary> = emptyList(),
+    val studyRecent: List<RecentStudyEntry> = emptyList(),
 )
 
 private fun parts(session: Session): Pair<String, String>? {
@@ -135,6 +143,13 @@ fun fetchCrewContent(
                 }.getOrDefault(emptyList())
             },
         )
+        val studyF: Future<List<StudySubject>> = pool.submit(
+            Callable {
+                runCatching {
+                    StudyCatalogClient(transport).listSubjects(owner, repo, token)
+                }.getOrDefault(emptyList())
+            },
+        )
 
         val tasks = tasksF.get()
         val readme = readmeF.get()
@@ -155,6 +170,8 @@ fun fetchCrewContent(
             docFailed = docs.failed,
             projectMeta = tasks.third,
             currentLogin = loginF.get(),
+            studySubjects = studyF.get(),
+            studyRecent = loadRecentStudy(cache),
         )
     } finally {
         pool.shutdownNow()

@@ -10,7 +10,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 - **소유(크루 시작)는 계정당 최대 1개.** 로그인한 사용자가 admin인 private 저장소를 골라 등록하면 그 사람이 해당 크루 운영진(owner)이 된다. 이미 owner인 크루가 있으면 새 등록을 막고, 기존 소유를 넘기거나 해제한 뒤에만 다시 등록한다.
 - **가입(멤버)은 여러 개.** 이메일 초대로 들어온 크루는 제한 없이 가질 수 있고, 앱에서 활성 크루를 바꿔 가며 본다.
 - 멤버 구성: 운영진이 **이메일**로 Organization 초대를 보낸다. 따라서 크루 보관소는 GitHub Free Organization 소속 private repository여야 한다. Team slug는 `admins`(운영진) / `members`(멤버).
-- 화면 문구에 Git, Commit, PR, Issue, Discussion을 노출하지 않는다. 사용자 용어는 자료실, 할 일, 게시판·카테고리·글, 서식, 소통, 공부, 크루 시작, 초대다.
+- 화면 문구에 Git, Commit, PR, Issue, Discussion을 노출하지 않는다. 사용자 용어는 자료실, 할 일, 게시판·카테고리·글, 서식, 소통, **학습**(공부 경험), 크루 시작, 초대다.
 - **공부** 세션은 영상 재생과 튜터 질문이 한 캔버스에 같이 있는 동안만 이어진다. 장면과 말이 서로 다른 곳으로 갈라지면 세션이 아니다. 경험 정본은 [docs/study/PRODUCT.md](docs/study/PRODUCT.md), 스키마는 §7이다.
 - 공부 UI는 네이티브다. **동영상만** WebView로 연다(`playbackUrl` / YouTube embed HTML + `baseURL`/`Referer`=`https://app.crewrp`). UniTutor SPA를 앱에 넣지 않는다. LLM 시크릿은 앱 바이너리에 넣지 않는다. Referer 미전송 시 Error 153. Android는 `WebChromeClient`·하드웨어 가속·WebView 언뮤트(`MUTE_AUDIO`)·embed `enablejsapi` 언뮤트가 필요(없면 화면만 나오고 소리가 빌 수 있음).
 - 앱 바이너리에 OAuth client secret과 GitHub App / Discord client secret을 넣지 않는다. 로그인은 시스템 브라우저와 Authorization Code + PKCE(S256)다. GitHub 액세스 토큰은 iOS Keychain, Android EncryptedSharedPreferences에만 둔다.
@@ -33,7 +33,7 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 
 ## 3. 화면과 API
 
-하단 탭은 홈, 할 일, 자료실, 소통이다. **공부**는 홈 CTA(또는 전용 진입)로 열고, 크루 그룹웨어 탭과 같은 앱 세션 안에 둔다. 로그인 직후는 **내 크루** 목록(소유·가입)이다. 소유 크루가 없으면 **크루 시작**(admin private repo 선택)을 할 수 있다.
+하단 탭은 **홈, 할 일, 학습, 자료실, 소통**이다(5탭). 학습은 크루 그룹웨어와 같은 앱 세션 안이다. 홈의 「이어서 할 공부」 CTA는 학습 탭·최근 수업으로 이어진다. 로그인 직후는 **내 크루** 목록(소유·가입)이다. 소유 크루가 없으면 **크루 시작**(admin private repo 선택)을 할 수 있다.
 
 | 화면 | 사용자 용어 | GitHub 리소스 | 연동 |
 |------|-------------|---------------|------|
@@ -41,12 +41,12 @@ CrewRP(Crew Resource Planning)의 불변 계약과 컴포넌트 *간* 인터페�
 | 내 크루 | 크루 전환 | memberships | 소유 0–1 + 가입 N. 하나를 골라 활성 세션으로 둔다 |
 | 크루 시작 | 크루 등록 | Repositories (admin) | admin private repo 중 하나 등록. 이미 owner면 불가 |
 | 초대 | 초대 | Organization invitation | 이메일만 |
-| 홈 | 홈 | Contents `README.md` + Projects | 크루 소개는 repo 루트 README 렌더. **내 담당** 할 일(Issue assignees·미완료) + 오늘·다가오는 요약(탭하면 할 일 화면에서 해당 항목 열림). Phase 7부터 **이어서 할 공부**·흐려진 `ReviewCard` CTA. 고정 공지 목록은 두지 않는다 |
-| 공부 | 공부 / 캔버스 | (선택) repo 강좌 JSON · 로컬 | 네이티브 2분할 캔버스. 영상=WebView embed, 튜터·경로·카드=네이티브. 스키마 §7. LLM은 네이티브→Worker/BYOK |
-| 투표 참여 | 투표 | Discussion poll | 기존 poll 조회와 `addDiscussionPollVote`. 앱에서 poll 생성은 하지 않는다 |
+| 홈 | 홈 | Contents `README.md` + Projects | 크루 소개는 repo 루트 README 렌더. **내 담당** 할 일(Issue assignees·미완료) + 오늘·다가오는 요약(탭하면 할 일 화면에서 해당 항목 열림). **이어서 할 공부**·흐려진 `ReviewCard` CTA(탭하면 학습). 고정 공지 목록은 두지 않는다 |
 | 할 일 | 할 일 / 댓글 / 담당 | Projects (v2), Issues | GraphQL로 칸반·납기. **담당자**는 Issue assignees(REST로 설정). **할 일별 댓글**은 연결된 Issue의 REST comments(목록·작성·수정·삭제). 소통 탭이 아님 |
+| 학습 | 최근 수업 / 과목·수업 / 과목 관리 | Contents `.crewrp/study/**` · 로컬 최근 목록 | 탭 본문: 최근 수업, 과목→수업 목록, (운영진만) 과목·수업 등록. 수업 탭 → §7 캔버스. 강좌 JSON 원본은 repo; 최근 수업·진도는 기기 로컬. LLM은 네이티브→Worker/BYOK |
+| 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` + Releases Assets | **문서**는 `docs/**/*.md`(필요 시 `.txt`) — Contents 목록·본문, Trees 검색, 인앱 마크다운 렌더/편집. **첨부**(이미지·PDF·기타)는 `crewrp-attachments` Release Assets — 업로드·목록·다운로드. 학습 강좌 JSON은 자료실에 두지 않는다(`.crewrp/study`). 본문에 넣을 때도 asset URL만. 범용 바이너리를 Contents에 올리지 않는다 |
+| 투표 참여 | 투표 | Discussion poll | 기존 poll 조회와 `addDiscussionPollVote`. 앱에서 poll 생성은 하지 않는다 |
 | 행정 서식 | 서식 | Issue Forms YAML, Issues | 앱이 `.github/ISSUE_TEMPLATE` YAML을 읽어 네이티브 폼을 그린 뒤 Issue를 생성 |
-| 정관 / 규정 / 자료 | 자료실 | Repository contents `/docs` + Releases Assets | **문서**는 `docs/**/*.md`(필요 시 `.txt`) — Contents 목록·본문, Trees 검색, 인앱 마크다운 렌더/편집. **첨부**(이미지·PDF·기타)는 `crewrp-attachments` Release Assets — 업로드·목록·다운로드. 탭 시 미리보기 가능하면 View(QuickLook/Intent), 아니면 Share/Download. 본문에 넣을 때도 asset URL만. 범용 바이너리를 Contents에 올리지 않는다 |
 | 정기 과업 | 자동 업무 | Actions | `workflow_dispatch` 또는 cron. private repository 포함 분(分) 안에서만 |
 | 소통 | 소통 / 바로 대화 / 게시판 | Discord + Discussions | **상단** 바로 대화: `.crewrp/settings.json` 서버·채널 딥링크(미연동이면 OAuth). **하단** 게시판: Discussions 카테고리 → 글 목록·본문·작성·**글 댓글**(Discussion comments 목록·작성·수정·삭제). 탭 진입 시 Discord를 자동으로 열지 않는다. Issue 댓글 UI 아님 |
 | 알림 | 알림 | Webhook | Phase 3. Webhook → Cloudflare Worker → FCM |
@@ -115,9 +115,27 @@ Worker가 구독하는 Webhook과 앱에 보이는 알림 이름:
 
 이 외 GitHub 이벤트는 푸시하지 않는다.
 
-## 7. 공부 (Study)
+## 7. 공부 (Study) / 학습 탭
 
 경험·말투·레이아웃 비율은 [docs/study/PRODUCT.md](docs/study/PRODUCT.md). 여기는 컴포넌트 *간* 계약과 식별자만 둔다. iOS·Android가 같은 필드를 쓴다.
+
+### 7.0 크루 강좌 원본 (repo)
+
+원본은 활성 크루 private repo의 Contents다. 자료실(`docs/`)과 경로를 섞지 않는다.
+
+| 경로 | 의미 |
+|------|------|
+| `.crewrp/study/subjects.json` | 과목 목록 `[{ "id", "title" }]` |
+| `.crewrp/study/<subjectId>/courses.json` | 해당 과목의 수업 id·title 목록 |
+| `.crewrp/study/<subjectId>/<courseId>/course.json` | `CourseAsset`(§7.2–7.3 + `knowledgeEdges` + 선택 `tutorPrompts`) |
+| `.crewrp/study/<subjectId>/<courseId>/concepts.json` | 배치 입력용 `ConceptMarker[]`(concept, startSec, slideLabel?) — 운영진 재생성용 |
+| `.crewrp/study/<subjectId>/<courseId>/source.vtt` | (선택) 자막 원본. 용량이 크면 생략 가능; 기기에만 두고 `course.json`만 커밋해도 된다 |
+
+**과정 만들기(배치)** 는 Cloudflare Worker가 아니라 **네이티브 코어**에서 한다: 자막(VTT/SRT) + `ConceptMarker[]` → `SourceSpan[]`(UniTutor `content/`와 동일 규칙). 운영진 앱이 결과를 Contents API로 커밋한다. 사용자 GitHub 토큰은 Worker에 저장하지 않는다. 1단계 `knowledgeEdges`는 span 순서 선형 DAG로 채우고, 비선형 편집은 후속이다. 번들 `cs-algo-intro-01`은 repo에 강좌가 없을 때의 폴백이다.
+
+**최근 수업** 은 기기 로컬(SQLite 또는 동등)에 `(courseId, subjectId, openedAt)`만 둔다. 원본이 아니다.
+
+**과목 관리** 는 `admins`(운영진)만 과목·수업 생성·수정·삭제·배치 저장을 한다. `members`는 목록·재생·경로만.
 
 ### 7.1 계약
 
