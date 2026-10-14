@@ -291,6 +291,28 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func draftStudyFromPlayback(url: String) async -> StudyCaptionDraft? {
+        do {
+            let draft = try await StudyCaptionClient(transport: transport).draftFromPlaybackURL(url)
+            writeError = nil
+            return draft
+        } catch {
+            writeError = "자막을 가져오지 못했습니다. 아래에 VTT를 붙여 넣으세요."
+            return nil
+        }
+    }
+
+    func draftStudyFromVTT(_ vtt: String) -> StudyCaptionDraft? {
+        do {
+            let draft = try StudyCaptionClient(transport: transport).draftFromVTT(vtt)
+            writeError = nil
+            return draft
+        } catch {
+            writeError = "자막을 읽지 못했습니다."
+            return nil
+        }
+    }
+
     func saveStudyCourse(
         subjectId: String,
         courseId: String,
@@ -1142,8 +1164,11 @@ private struct StudyTab: View {
     @State private var courseId = ""
     @State private var courseTitle = ""
     @State private var playbackUrl = ""
-    @State private var markersText = "0\t도입"
-    @State private var vttText = "WEBVTT\n\n00:00:00.000 --> 00:01:00.000\nhello\n"
+    @State private var draftMarkers: [ConceptMarker] = []
+    @State private var draftVtt = ""
+    @State private var vttFallback = ""
+    @State private var showVttFallback = false
+    @State private var drafting = false
 
     var body: some View {
         NavigationStack {
@@ -1213,27 +1238,72 @@ private struct StudyTab: View {
                         TextField("수업 id", text: $courseId)
                         TextField("수업 제목", text: $courseTitle)
                         TextField("재생 URL", text: $playbackUrl)
-                        TextField("개념 마커 (초\\t이름)", text: $markersText, axis: .vertical)
-                            .lineLimit(3...6)
-                        TextField("자막 (VTT)", text: $vttText, axis: .vertical)
-                            .lineLimit(4...10)
-                        Button("수업 저장") {
-                            let sid = (selectedSubject ?? subjectId).trimmingCharacters(in: .whitespacesAndNewlines)
-                            let markers: [ConceptMarker] = markersText.split(whereSeparator: \.isNewline).compactMap { line in
-                                let parts = line.split { $0 == "\t" || $0 == "," || $0 == "|" }.map { $0.trimmingCharacters(in: .whitespaces) }
-                                guard parts.count >= 2, let sec = Int(parts[0]) else { return nil }
-                                return ConceptMarker(concept: String(parts[1]), startSec: sec, slideLabel: parts.count > 2 ? String(parts[2]) : "")
-                            }
+                        Button(drafting ? "초안 만드는 중…" : "초안 만들기") {
                             Task {
-                                await model.saveStudyCourse(
-                                    subjectId: sid,
-                                    courseId: courseId,
-                                    title: courseTitle.isEmpty ? courseId : courseTitle,
-                                    playbackUrl: playbackUrl,
-                                    markers: markers,
-                                    vttText: vttText
-                                )
+                                drafting = true
+                                defer { drafting = false }
+                                if let draft = await model.draftStudyFromPlayback(url: playbackUrl) {
+                                    draftMarkers = draft.markers
+                                    draftVtt = draft.vtt
+                                    showVttFallback = false
+                                } else {
+                                    showVttFallback = true
+                                }
                             }
+                        }
+                        .disabled(drafting || playbackUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        if showVttFallback {
+                            TextField("자막 (VTT) 붙여넣기", text: $vttFallback, axis: .vertical)
+                                .lineLimit(4...10)
+                            Button("VTT로 초안 만들기") {
+                                if let draft = model.draftStudyFromVTT(vttFallback) {
+                                    draftMarkers = draft.markers
+                                    draftVtt = draft.vtt
+                                }
+                            }
+                        }
+                    }
+                    if !draftMarkers.isEmpty {
+                        Section("초안 검수") {
+                            ForEach(Array(draftMarkers.enumerated()), id: \.offset) { index, marker in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("\(marker.startSec)초")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    TextField("개념 이름", text: Binding(
+                                        get: { draftMarkers[index].concept },
+                                        set: { newValue in
+                                            draftMarkers[index].concept = newValue
+                                            draftMarkers[index].slideLabel = newValue
+                                        }
+                                    ))
+                                    HStack {
+                                        if index + 1 < draftMarkers.count {
+                                            Button("다음과 합치기") {
+                                                draftMarkers = mergeAdjacentConceptMarkers(draftMarkers, at: index)
+                                            }
+                                        }
+                                        Button("삭제", role: .destructive) {
+                                            draftMarkers.remove(at: index)
+                                        }
+                                    }
+                                    .font(.caption)
+                                }
+                            }
+                            Button("수업 저장") {
+                                let sid = (selectedSubject ?? subjectId).trimmingCharacters(in: .whitespacesAndNewlines)
+                                Task {
+                                    await model.saveStudyCourse(
+                                        subjectId: sid,
+                                        courseId: courseId,
+                                        title: courseTitle.isEmpty ? courseId : courseTitle,
+                                        playbackUrl: playbackUrl,
+                                        markers: draftMarkers,
+                                        vttText: draftVtt
+                                    )
+                                }
+                            }
+                            .disabled(draftMarkers.isEmpty || courseId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
                 }

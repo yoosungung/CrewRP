@@ -196,6 +196,199 @@ extension CourseAsset {
     }
 }
 
+public struct VideoChapter: Sendable, Equatable {
+    public var title: String
+    public var startSec: Int
+
+    public init(title: String, startSec: Int) {
+        self.title = title
+        self.startSec = startSec
+    }
+}
+
+public struct YouTubeWatchPayload: Sendable, Equatable {
+    public var chapters: [VideoChapter]
+    public var captionTrackURL: String?
+
+    public init(chapters: [VideoChapter], captionTrackURL: String?) {
+        self.chapters = chapters
+        self.captionTrackURL = captionTrackURL
+    }
+}
+
+/// 챕터가 있으면 그걸 쓰고, 없으면 자막 cue를 `windowSec` 창으로 묶어 초안 마커를 만든다.
+public func draftConceptMarkers(
+    chapters: [VideoChapter],
+    cues: [SubtitleCue],
+    windowSec: Int = 180
+) -> [ConceptMarker] {
+    if !chapters.isEmpty {
+        var seen = Set<Int>()
+        var out: [ConceptMarker] = []
+        for ch in chapters.sorted(by: { $0.startSec < $1.startSec }) {
+            guard !seen.contains(ch.startSec) else { continue }
+            seen.insert(ch.startSec)
+            let name = ch.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { continue }
+            out.append(ConceptMarker(concept: name, startSec: ch.startSec, slideLabel: name))
+        }
+        return out
+    }
+    guard !cues.isEmpty else { return [] }
+    let window = max(30, windowSec)
+    var out: [ConceptMarker] = []
+    var bucketStart = Int(cues[0].startSec)
+    var bucketLabel = cueLabel(cues[0].text)
+    for cue in cues.dropFirst() {
+        let sec = Int(cue.startSec)
+        if sec - bucketStart >= window {
+            out.append(ConceptMarker(concept: bucketLabel, startSec: bucketStart, slideLabel: bucketLabel))
+            bucketStart = sec
+            bucketLabel = cueLabel(cue.text)
+        }
+    }
+    out.append(ConceptMarker(concept: bucketLabel, startSec: bucketStart, slideLabel: bucketLabel))
+    return out
+}
+
+public func mergeAdjacentConceptMarkers(_ markers: [ConceptMarker], at index: Int) -> [ConceptMarker] {
+    guard index >= 0, index + 1 < markers.count else { return markers }
+    var next = markers
+    next.remove(at: index + 1)
+    return next
+}
+
+public func youtubeVideoId(from playbackUrl: String) -> String? {
+    guard let url = URL(string: playbackUrl.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+    let host = url.host?.lowercased() ?? ""
+    if host.contains("youtu.be") {
+        let id = url.path.split(separator: "/").first.map(String.init)
+        return validYouTubeId(id)
+    }
+    if host.contains("youtube.com") || host.contains("youtube-nocookie.com") {
+        if let v = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "v" })?.value {
+            return validYouTubeId(v)
+        }
+        let parts = url.path.split(separator: "/").map(String.init)
+        if let embed = parts.firstIndex(of: "embed"), embed + 1 < parts.count {
+            return validYouTubeId(parts[embed + 1])
+        }
+        if let shorts = parts.firstIndex(of: "shorts"), shorts + 1 < parts.count {
+            return validYouTubeId(parts[shorts + 1])
+        }
+    }
+    return nil
+}
+
+public func parseYouTubeWatchPayload(_ html: String) throws -> YouTubeWatchPayload {
+    guard let json = extractYtInitialPlayerResponse(html) else {
+        throw StudyBatchError.invalidRange("ytInitialPlayerResponse")
+    }
+    let data = Data(json.utf8)
+    let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+    let chapters = parseChapters(from: root)
+    let caption = pickCaptionTrackURL(from: root)
+    return YouTubeWatchPayload(chapters: chapters, captionTrackURL: caption)
+}
+
+public func youtubeWatchURL(videoId: String) -> String {
+    "https://www.youtube.com/watch?v=\(videoId)"
+}
+
+public func youtubeCaptionRequestURL(_ base: String) -> String {
+    if base.contains("fmt=") { return base }
+    return base.contains("?") ? "\(base)&fmt=vtt" : "\(base)?fmt=vtt"
+}
+
+private func cueLabel(_ text: String) -> String {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty { return "구간" }
+    if trimmed.count <= 24 { return trimmed }
+    let idx = trimmed.index(trimmed.startIndex, offsetBy: 20)
+    return String(trimmed[..<idx]).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func validYouTubeId(_ raw: String?) -> String? {
+    guard let raw else { return nil }
+    let id = raw.split(separator: "?").first.map(String.init) ?? raw
+    guard id.range(of: #"^[A-Za-z0-9_-]{6,}\z"#, options: .regularExpression) != nil else { return nil }
+    return id
+}
+
+private func extractYtInitialPlayerResponse(_ html: String) -> String? {
+    let marker = "ytInitialPlayerResponse"
+    guard let range = html.range(of: marker) else { return nil }
+    var i = html[range.upperBound...].startIndex
+    while i < html.endIndex, html[i] != "{" { i = html.index(after: i) }
+    guard i < html.endIndex else { return nil }
+    var depth = 0
+    var inString = false
+    var escape = false
+    var j = i
+    while j < html.endIndex {
+        let c = html[j]
+        if inString {
+            if escape { escape = false }
+            else if c == "\\" { escape = true }
+            else if c == "\"" { inString = false }
+        } else {
+            if c == "\"" { inString = true }
+            else if c == "{" { depth += 1 }
+            else if c == "}" {
+                depth -= 1
+                if depth == 0 {
+                    return String(html[i...j])
+                }
+            }
+        }
+        j = html.index(after: j)
+    }
+    return nil
+}
+
+private func parseChapters(from root: [String: Any]) -> [VideoChapter] {
+    guard let map = root["markersMap"] as? [[String: Any]] else { return [] }
+    for entry in map {
+        let key = entry["key"] as? String ?? ""
+        guard key.contains("CHAPTER") else { continue }
+        let value = entry["value"] as? [String: Any] ?? [:]
+        let chapters = value["chapters"] as? [[String: Any]] ?? []
+        var out: [VideoChapter] = []
+        for ch in chapters {
+            let renderer = ch["chapterRenderer"] as? [String: Any] ?? ch
+            let titleObj = renderer["title"] as? [String: Any]
+            let title = (titleObj?["simpleText"] as? String)
+                ?? ((titleObj?["runs"] as? [[String: Any]])?.first?["text"] as? String)
+                ?? ""
+            let ms = renderer["timeRangeStartMillis"] as? Int
+                ?? (renderer["timeRangeStartMillis"] as? Double).map { Int($0) }
+                ?? 0
+            let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty {
+                out.append(VideoChapter(title: name, startSec: ms / 1000))
+            }
+        }
+        if !out.isEmpty { return out }
+    }
+    return []
+}
+
+private func pickCaptionTrackURL(from root: [String: Any]) -> String? {
+    let captions = root["captions"] as? [String: Any]
+    let list = captions?["playerCaptionsTracklistRenderer"] as? [String: Any]
+    let tracks = list?["captionTracks"] as? [[String: Any]] ?? []
+    guard !tracks.isEmpty else { return nil }
+    let preferred = ["ko", "en", "en-US", "en-GB"]
+    for lang in preferred {
+        if let hit = tracks.first(where: { ($0["languageCode"] as? String)?.lowercased() == lang.lowercased() }),
+           let url = hit["baseUrl"] as? String, !url.isEmpty {
+            return url
+        }
+    }
+    return tracks.first?["baseUrl"] as? String
+}
+
 private func toSec(_ h: Substring, _ m: Substring, _ s: Substring, _ ms: Substring) -> Double {
     Double(h)! * 3600 + Double(m)! * 60 + Double(s)! + Double(ms)! / 1000
 }

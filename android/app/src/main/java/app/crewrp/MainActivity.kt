@@ -37,6 +37,7 @@ import app.crewrp.core.PendingLoginStore
 import app.crewrp.core.Session
 import app.crewrp.core.CourseAsset
 import app.crewrp.core.CourseRef
+import app.crewrp.core.StudyCaptionClient
 import app.crewrp.core.StudyCatalogClient
 import app.crewrp.core.StudyCourseSummary
 import app.crewrp.core.StudySubject
@@ -593,6 +594,20 @@ class MainActivity : ComponentActivity() {
                                             runOnUiThread {
                                                 content = content.copy(writeError = writeFailureMessage(err.message ?: err.toString()))
                                             }
+                                        }
+                                    }
+                                },
+                                onDraftStudyFromPlayback = { url, done ->
+                                    thread {
+                                        val result = runCatching {
+                                            StudyCaptionClient(transport).draftFromPlaybackUrl(url)
+                                        }
+                                        runOnUiThread {
+                                            result
+                                                .onSuccess { done(it, null) }
+                                                .onFailure {
+                                                    done(null, "자막을 가져오지 못했습니다. 아래에 VTT를 붙여 넣으세요.")
+                                                }
                                         }
                                     }
                                 },

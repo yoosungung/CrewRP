@@ -197,6 +197,51 @@ struct StudyBatchTests {
         #expect(spans[1].endSec == 60)
         try assertValidSourceSpans(spans, courseId: "demo")
     }
+
+    @Test("draftConceptMarkers prefers chapters")
+    func draftFromChapters() {
+        let cues = [SubtitleCue(startSec: 0, endSec: 600, text: "long")]
+        let chapters = [
+            VideoChapter(title: "Intro", startSec: 0),
+            VideoChapter(title: "Peak", startSec: 120),
+        ]
+        let draft = draftConceptMarkers(chapters: chapters, cues: cues, windowSec: 180)
+        #expect(draft.map(\.concept) == ["Intro", "Peak"])
+        #expect(draft.map(\.startSec) == [0, 120])
+    }
+
+    @Test("draftConceptMarkers windows cues when no chapters")
+    func draftFromCues() {
+        let cues = [
+            SubtitleCue(startSec: 0, endSec: 10, text: "hello world here"),
+            SubtitleCue(startSec: 100, endSec: 110, text: "mid"),
+            SubtitleCue(startSec: 200, endSec: 210, text: "later part"),
+        ]
+        let draft = draftConceptMarkers(chapters: [], cues: cues, windowSec: 180)
+        #expect(draft.count == 2)
+        #expect(draft[0].startSec == 0)
+        #expect(draft[0].concept.hasPrefix("hello"))
+        #expect(draft[1].startSec == 200)
+    }
+
+    @Test("youtubeVideoId from embed and watch urls")
+    func youtubeId() {
+        #expect(youtubeVideoId(from: "https://www.youtube.com/embed/HtSuA80QTyo") == "HtSuA80QTyo")
+        #expect(youtubeVideoId(from: "https://www.youtube.com/watch?v=HtSuA80QTyo&t=9") == "HtSuA80QTyo")
+        #expect(youtubeVideoId(from: "https://youtu.be/HtSuA80QTyo") == "HtSuA80QTyo")
+        #expect(youtubeVideoId(from: "https://example.com/x") == nil)
+    }
+
+    @Test("parseYouTubeWatchPayload extracts chapters and caption url")
+    func parseWatchPayload() throws {
+        let html = """
+        <html><script>var ytInitialPlayerResponse = {"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://www.youtube.com/api/timedtext?v=abc","languageCode":"en"}]}},"markersMap":[{"key":"DESCRIPTION_CHAPTERS","value":{"chapters":[{"chapterRenderer":{"title":{"simpleText":"Intro"},"timeRangeStartMillis":0}},{"chapterRenderer":{"title":{"simpleText":"Next"},"timeRangeStartMillis":120000}}]}}]};</script></html>
+        """
+        let parsed = try parseYouTubeWatchPayload(html)
+        #expect(parsed.chapters.map(\.title) == ["Intro", "Next"])
+        #expect(parsed.chapters.map(\.startSec) == [0, 120])
+        #expect(parsed.captionTrackURL?.contains("timedtext") == true)
+    }
 }
 
 @Suite("Study catalog")

@@ -201,6 +201,184 @@ fun CourseAsset.toJson(): String {
     return root.toString(2)
 }
 
+data class VideoChapter(
+    val title: String,
+    val startSec: Int,
+)
+
+data class YouTubeWatchPayload(
+    val chapters: List<VideoChapter>,
+    val captionTrackUrl: String?,
+)
+
+/** 챕터가 있으면 그걸 쓰고, 없으면 자막 cue를 windowSec 창으로 묶어 초안 마커를 만든다. */
+fun draftConceptMarkers(
+    chapters: List<VideoChapter>,
+    cues: List<SubtitleCue>,
+    windowSec: Int = 180,
+): List<ConceptMarker> {
+    if (chapters.isNotEmpty()) {
+        val seen = mutableSetOf<Int>()
+        val out = mutableListOf<ConceptMarker>()
+        for (ch in chapters.sortedBy { it.startSec }) {
+            if (!seen.add(ch.startSec)) continue
+            val name = ch.title.trim()
+            if (name.isEmpty()) continue
+            out += ConceptMarker(name, ch.startSec, name)
+        }
+        return out
+    }
+    if (cues.isEmpty()) return emptyList()
+    val window = maxOf(30, windowSec)
+    val out = mutableListOf<ConceptMarker>()
+    var bucketStart = cues[0].startSec.toInt()
+    var bucketLabel = cueLabel(cues[0].text)
+    for (cue in cues.drop(1)) {
+        val sec = cue.startSec.toInt()
+        if (sec - bucketStart >= window) {
+            out += ConceptMarker(bucketLabel, bucketStart, bucketLabel)
+            bucketStart = sec
+            bucketLabel = cueLabel(cue.text)
+        }
+    }
+    out += ConceptMarker(bucketLabel, bucketStart, bucketLabel)
+    return out
+}
+
+fun mergeAdjacentConceptMarkers(markers: List<ConceptMarker>, at: Int): List<ConceptMarker> {
+    if (at < 0 || at + 1 >= markers.size) return markers
+    return markers.toMutableList().also { it.removeAt(at + 1) }
+}
+
+fun youtubeVideoId(playbackUrl: String): String? {
+    val trimmed = playbackUrl.trim()
+    val uri = runCatching { java.net.URI(trimmed) }.getOrNull() ?: return null
+    val host = (uri.host ?: "").lowercase()
+    if (host.contains("youtu.be")) {
+        return validYouTubeId(uri.path.trim('/').substringBefore('/'))
+    }
+    if (host.contains("youtube.com") || host.contains("youtube-nocookie.com")) {
+        val query = uri.rawQuery?.split("&")?.mapNotNull {
+            val p = it.split("=", limit = 2)
+            if (p.size == 2 && p[0] == "v") p[1] else null
+        }?.firstOrNull()
+        if (query != null) return validYouTubeId(query)
+        val parts = uri.path.trim('/').split('/')
+        val embed = parts.indexOf("embed")
+        if (embed >= 0 && embed + 1 < parts.size) return validYouTubeId(parts[embed + 1])
+        val shorts = parts.indexOf("shorts")
+        if (shorts >= 0 && shorts + 1 < parts.size) return validYouTubeId(parts[shorts + 1])
+    }
+    return null
+}
+
+fun parseYouTubeWatchPayload(html: String): YouTubeWatchPayload {
+    val json = extractYtInitialPlayerResponse(html)
+        ?: throw StudyBatchException("ytInitialPlayerResponse missing")
+    val root = JSONObject(json)
+    return YouTubeWatchPayload(
+        chapters = parseChapters(root),
+        captionTrackUrl = pickCaptionTrackUrl(root),
+    )
+}
+
+fun youtubeWatchUrl(videoId: String): String = "https://www.youtube.com/watch?v=$videoId"
+
+fun youtubeCaptionRequestUrl(base: String): String =
+    when {
+        base.contains("fmt=") -> base
+        base.contains("?") -> "$base&fmt=vtt"
+        else -> "$base?fmt=vtt"
+    }
+
+private fun cueLabel(text: String): String {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return "구간"
+    return if (trimmed.length <= 24) trimmed else trimmed.take(20).trim()
+}
+
+private fun validYouTubeId(raw: String?): String? {
+    if (raw.isNullOrBlank()) return null
+    val id = raw.substringBefore('?')
+    return if (Regex("^[A-Za-z0-9_-]{6,}$").matches(id)) id else null
+}
+
+private fun extractYtInitialPlayerResponse(html: String): String? {
+    val marker = "ytInitialPlayerResponse"
+    val start = html.indexOf(marker)
+    if (start < 0) return null
+    var i = start + marker.length
+    while (i < html.length && html[i] != '{') i++
+    if (i >= html.length) return null
+    var depth = 0
+    var inString = false
+    var escape = false
+    var j = i
+    while (j < html.length) {
+        val c = html[j]
+        if (inString) {
+            when {
+                escape -> escape = false
+                c == '\\' -> escape = true
+                c == '"' -> inString = false
+            }
+        } else {
+            when (c) {
+                '"' -> inString = true
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return html.substring(i, j + 1)
+                }
+            }
+        }
+        j++
+    }
+    return null
+}
+
+private fun parseChapters(root: JSONObject): List<VideoChapter> {
+    val map = root.optJSONArray("markersMap") ?: return emptyList()
+    for (i in 0 until map.length()) {
+        val entry = map.optJSONObject(i) ?: continue
+        val key = entry.optString("key")
+        if (!key.contains("CHAPTER")) continue
+        val chapters = entry.optJSONObject("value")?.optJSONArray("chapters") ?: continue
+        val out = mutableListOf<VideoChapter>()
+        for (j in 0 until chapters.length()) {
+            val ch = chapters.optJSONObject(j) ?: continue
+            val renderer = ch.optJSONObject("chapterRenderer") ?: ch
+            val titleObj = renderer.optJSONObject("title")
+            val title = titleObj?.optString("simpleText")?.takeIf { it.isNotBlank() }
+                ?: titleObj?.optJSONArray("runs")?.optJSONObject(0)?.optString("text").orEmpty()
+            val ms = renderer.optInt("timeRangeStartMillis", 0)
+            val name = title.trim()
+            if (name.isNotEmpty()) out += VideoChapter(name, ms / 1000)
+        }
+        if (out.isNotEmpty()) return out
+    }
+    return emptyList()
+}
+
+private fun pickCaptionTrackUrl(root: JSONObject): String? {
+    val tracks = root.optJSONObject("captions")
+        ?.optJSONObject("playerCaptionsTracklistRenderer")
+        ?.optJSONArray("captionTracks")
+        ?: return null
+    if (tracks.length() == 0) return null
+    val preferred = listOf("ko", "en", "en-US", "en-GB")
+    for (lang in preferred) {
+        for (i in 0 until tracks.length()) {
+            val t = tracks.optJSONObject(i) ?: continue
+            if (t.optString("languageCode").equals(lang, ignoreCase = true)) {
+                val url = t.optString("baseUrl")
+                if (url.isNotBlank()) return url
+            }
+        }
+    }
+    return tracks.optJSONObject(0)?.optString("baseUrl")?.takeIf { it.isNotBlank() }
+}
+
 private fun toSec(h: String, m: String, s: String, ms: String): Double =
     h.toInt() * 3600.0 + m.toInt() * 60.0 + s.toInt() + ms.toInt() / 1000.0
 

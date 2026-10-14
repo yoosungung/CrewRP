@@ -133,6 +133,8 @@ Worker가 구독하는 Webhook과 앱에 보이는 알림 이름:
 
 **과정 만들기(배치)** 는 Cloudflare Worker가 아니라 **네이티브 코어**에서 한다: 자막(VTT/SRT) + `ConceptMarker[]` → `SourceSpan[]`(UniTutor `content/`와 동일 규칙). 운영진 앱이 결과를 Contents API로 커밋한다. 사용자 GitHub 토큰은 Worker에 저장하지 않는다. 1단계 `knowledgeEdges`는 span 순서 선형 DAG로 채우고, 비선형 편집은 후속이다. `CourseAsset.loadBundled()` / `cs-algo-intro-01`은 **단위 테스트·튜터 계약 픽스처**다. 학습 탭·홈 CTA·카탈로그 빈 상태에 넣지 않는다 — repo가 비면 빈 UI다.
 
+**수업 초안(S7-15)** 은 재생 URL에서 자막·챕터를 읽고 `draftConceptMarkers(chapters:cues:windowSec:)`로 마커 초안을 만든다. 챕터가 있으면 챕터 우선, 없으면 자막 cue를 `windowSec`(기본 180)으로 묶는다. 운영진 검수 후 기존 배치·Contents 저장. LLM 구간 추출은 계약에 넣지 않는다.
+
 **최근 수업** 은 기기 로컬(SQLite 또는 동등)에 `(courseId, subjectId, openedAt)`만 둔다. 원본이 아니다.
 
 **과목 관리** 는 `admins`(운영진)만 과목·수업 생성·수정·삭제·배치 저장을 한다. `members`는 목록·재생·경로만.

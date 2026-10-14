@@ -137,9 +137,12 @@ import app.crewrp.core.ConceptMarker
 import app.crewrp.core.PathPlacement
 import app.crewrp.core.RecentStudyEntry
 import app.crewrp.core.Session
+import app.crewrp.core.StudyCaptionDraft
 import app.crewrp.core.StudyPath
 import app.crewrp.core.StudySplitRatio
 import app.crewrp.core.TaskCard
+import app.crewrp.core.draftStudyFromVtt
+import app.crewrp.core.mergeAdjacentConceptMarkers
 import app.crewrp.core.TaskLane
 import app.crewrp.core.TeamRole
 import app.crewrp.core.ThreadMessage
@@ -230,6 +233,7 @@ data class CrewActions(
     val onLoadStudyCourses: (subjectId: String) -> Unit,
     val onOpenStudyCourse: (subjectId: String, courseId: String, title: String) -> Unit,
     val onSaveStudySubject: (id: String, title: String) -> Unit,
+    val onDraftStudyFromPlayback: (url: String, done: (StudyCaptionDraft?, String?) -> Unit) -> Unit,
     val onSaveStudyCourse: (
         subjectId: String,
         courseId: String,
@@ -479,6 +483,7 @@ fun CrewShell(
                         actions.onOpenStudyCourse(subjectId, courseId, title)
                     },
                     onSaveSubject = actions.onSaveStudySubject,
+                    onDraftFromPlayback = actions.onDraftStudyFromPlayback,
                     onSaveCourse = actions.onSaveStudyCourse,
                 )
                 SHELL_DOCS_TAB_INDEX -> DocsTab(
@@ -1210,6 +1215,7 @@ private fun StudyTab(
     onSelectSubject: (String) -> Unit,
     onOpenCourse: (subjectId: String, courseId: String, title: String) -> Unit,
     onSaveSubject: (id: String, title: String) -> Unit,
+    onDraftFromPlayback: (url: String, done: (StudyCaptionDraft?, String?) -> Unit) -> Unit,
     onSaveCourse: (
         subjectId: String,
         courseId: String,
@@ -1225,8 +1231,12 @@ private fun StudyTab(
     var courseId by remember { mutableStateOf("") }
     var courseTitle by remember { mutableStateOf("") }
     var playbackUrl by remember { mutableStateOf("") }
-    var markersText by remember { mutableStateOf("0\t도입") }
-    var vttText by remember { mutableStateOf("WEBVTT\n\n00:00:00.000 --> 00:01:00.000\nhello\n") }
+    var draftMarkers by remember { mutableStateOf<List<ConceptMarker>>(emptyList()) }
+    var draftVtt by remember { mutableStateOf("") }
+    var vttFallback by remember { mutableStateOf("") }
+    var showVttFallback by remember { mutableStateOf(false) }
+    var drafting by remember { mutableStateOf(false) }
+    var draftError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(selectedSubject) {
         selectedSubject?.let { onSelectSubject(it) }
@@ -1295,32 +1305,90 @@ private fun StudyTab(
             OutlinedTextField(courseId, { courseId = it }, label = { Text("수업 id") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(courseTitle, { courseTitle = it }, label = { Text("수업 제목") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(playbackUrl, { playbackUrl = it }, label = { Text("재생 URL") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(
-                markersText,
-                { markersText = it },
-                label = { Text("개념 마커 (초\\t이름)") },
-                modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
-            )
-            OutlinedTextField(
-                vttText,
-                { vttText = it },
-                label = { Text("자막 (VTT)") },
-                modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
-            )
             Button(
                 onClick = {
-                    val sid = (selectedSubject ?: subjectId).trim()
-                    if (sid.isBlank() || courseId.isBlank()) return@Button
-                    val markers = markersText.lines().mapNotNull { line ->
-                        val parts = line.split('\t', ',', '|').map { it.trim() }.filter { it.isNotEmpty() }
-                        if (parts.size < 2) return@mapNotNull null
-                        val sec = parts[0].toIntOrNull() ?: return@mapNotNull null
-                        ConceptMarker(parts[1], sec, parts.getOrNull(2) ?: "")
+                    if (playbackUrl.isBlank() || drafting) return@Button
+                    drafting = true
+                    draftError = null
+                    onDraftFromPlayback(playbackUrl.trim()) { draft, err ->
+                        drafting = false
+                        if (draft != null) {
+                            draftMarkers = draft.markers
+                            draftVtt = draft.vtt
+                            showVttFallback = false
+                            draftError = null
+                        } else {
+                            showVttFallback = true
+                            draftError = err ?: "자막을 가져오지 못했습니다. 아래에 VTT를 붙여 넣으세요."
+                        }
                     }
-                    onSaveCourse(sid, courseId.trim(), courseTitle.trim().ifBlank { courseId.trim() }, playbackUrl.trim(), markers, vttText)
                 },
+                enabled = !drafting && playbackUrl.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("수업 저장") }
+            ) { Text(if (drafting) "초안 만드는 중…" else "초안 만들기") }
+            draftError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            if (showVttFallback) {
+                OutlinedTextField(
+                    vttFallback,
+                    { vttFallback = it },
+                    label = { Text("자막 (VTT) 붙여넣기") },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
+                )
+                Button(
+                    onClick = {
+                        runCatching { draftStudyFromVtt(vttFallback) }
+                            .onSuccess {
+                                draftMarkers = it.markers
+                                draftVtt = it.vtt
+                                draftError = null
+                            }
+                            .onFailure { draftError = "자막을 읽지 못했습니다." }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("VTT로 초안 만들기") }
+            }
+
+            if (draftMarkers.isNotEmpty()) {
+                Text("초안 검수", style = MaterialTheme.typography.titleSmall)
+                draftMarkers.forEachIndexed { index, marker ->
+                    Text("${marker.startSec}초", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedTextField(
+                        marker.concept,
+                        { name ->
+                            draftMarkers = draftMarkers.toMutableList().also {
+                                it[index] = marker.copy(concept = name, slideLabel = name)
+                            }
+                        },
+                        label = { Text("개념 이름") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (index + 1 < draftMarkers.size) {
+                            TextButton(onClick = {
+                                draftMarkers = mergeAdjacentConceptMarkers(draftMarkers, index)
+                            }) { Text("다음과 합치기") }
+                        }
+                        TextButton(onClick = {
+                            draftMarkers = draftMarkers.toMutableList().also { it.removeAt(index) }
+                        }) { Text("삭제") }
+                    }
+                }
+                Button(
+                    onClick = {
+                        val sid = (selectedSubject ?: subjectId).trim()
+                        if (sid.isBlank() || courseId.isBlank() || draftMarkers.isEmpty()) return@Button
+                        onSaveCourse(
+                            sid,
+                            courseId.trim(),
+                            courseTitle.trim().ifBlank { courseId.trim() },
+                            playbackUrl.trim(),
+                            draftMarkers,
+                            draftVtt,
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("수업 저장") }
+            }
         }
     }
 }

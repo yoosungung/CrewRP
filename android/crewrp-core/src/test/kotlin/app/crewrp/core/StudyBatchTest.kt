@@ -75,6 +75,53 @@ class StudyBatchTest {
             buildSourceSpans(courseId, emptyList(), cues)
         }
     }
+
+    @Test
+    fun draftConceptMarkersPrefersChapters() {
+        val draft = draftConceptMarkers(
+            listOf(VideoChapter("Intro", 0), VideoChapter("Peak", 120)),
+            listOf(SubtitleCue(0.0, 600.0, "long")),
+            windowSec = 180,
+        )
+        assertEquals(listOf("Intro", "Peak"), draft.map { it.concept })
+        assertEquals(listOf(0, 120), draft.map { it.startSec })
+    }
+
+    @Test
+    fun draftConceptMarkersWindowsCuesWhenNoChapters() {
+        val draft = draftConceptMarkers(
+            emptyList(),
+            listOf(
+                SubtitleCue(0.0, 10.0, "hello world here"),
+                SubtitleCue(100.0, 110.0, "mid"),
+                SubtitleCue(200.0, 210.0, "later part"),
+            ),
+            windowSec = 180,
+        )
+        assertEquals(2, draft.size)
+        assertEquals(0, draft[0].startSec)
+        assertTrue(draft[0].concept.startsWith("hello"))
+        assertEquals(200, draft[1].startSec)
+    }
+
+    @Test
+    fun youtubeVideoIdFromEmbedAndWatch() {
+        assertEquals("HtSuA80QTyo", youtubeVideoId("https://www.youtube.com/embed/HtSuA80QTyo"))
+        assertEquals("HtSuA80QTyo", youtubeVideoId("https://www.youtube.com/watch?v=HtSuA80QTyo&t=9"))
+        assertEquals("HtSuA80QTyo", youtubeVideoId("https://youtu.be/HtSuA80QTyo"))
+        assertEquals(null, youtubeVideoId("https://example.com/x"))
+    }
+
+    @Test
+    fun parseYouTubeWatchPayloadExtractsChaptersAndCaptionUrl() {
+        val html = """
+            <html><script>var ytInitialPlayerResponse = {"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://www.youtube.com/api/timedtext?v=abc","languageCode":"en"}]}},"markersMap":[{"key":"DESCRIPTION_CHAPTERS","value":{"chapters":[{"chapterRenderer":{"title":{"simpleText":"Intro"},"timeRangeStartMillis":0}},{"chapterRenderer":{"title":{"simpleText":"Next"},"timeRangeStartMillis":120000}}]}}]};</script></html>
+        """.trimIndent()
+        val parsed = parseYouTubeWatchPayload(html)
+        assertEquals(listOf("Intro", "Next"), parsed.chapters.map { it.title })
+        assertEquals(listOf(0, 120), parsed.chapters.map { it.startSec })
+        assertTrue(parsed.captionTrackUrl!!.contains("timedtext"))
+    }
 }
 
 class StudyCatalogTest {
