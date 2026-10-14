@@ -29,6 +29,76 @@ data class PathItem(
     val returnToSpanId: String? = null,
 )
 
+/** 지식 DAG 간선. `fromSpanId`가 `toSpanId`의 선수. */
+data class KnowledgeEdge(
+    val fromSpanId: String,
+    val toSpanId: String,
+)
+
+/**
+ * Advisor 온보딩·detour를 담는 학습 경로.
+ * 활성 장면: 활성 detour → 없으면 current ([ARCHITECTURE.md] §7.3).
+ */
+data class StudyPath(val items: List<PathItem>) {
+    fun activeSpanId(): String? =
+        items.firstOrNull { it.placement == PathPlacement.DETOUR }?.sourceSpanId
+            ?: items.firstOrNull { it.placement == PathPlacement.CURRENT }?.sourceSpanId
+
+    fun insertDetour(edges: List<KnowledgeEdge>, stuckSpanId: String): StudyPath {
+        if (items.any { it.placement == PathPlacement.DETOUR }) return this
+        val prereq = edges.firstOrNull { it.toSpanId == stuckSpanId }?.fromSpanId ?: return this
+        val stuckIdx = items.indexOfFirst { it.sourceSpanId == stuckSpanId }
+        if (stuckIdx < 0) return this
+        val next = items.toMutableList()
+        next.add(
+            stuckIdx,
+            PathItem(prereq, PathPlacement.DETOUR, returnToSpanId = stuckSpanId),
+        )
+        return StudyPath(next)
+    }
+
+    fun completeDetour(): StudyPath {
+        val detour = items.firstOrNull { it.placement == PathPlacement.DETOUR } ?: return this
+        val returnId = detour.returnToSpanId ?: return this
+        return StudyPath(
+            items.filterNot { it.placement == PathPlacement.DETOUR }.map { item ->
+                when {
+                    item.sourceSpanId == returnId -> item.copy(placement = PathPlacement.CURRENT)
+                    item.placement == PathPlacement.CURRENT -> item.copy(placement = PathPlacement.PLANNED)
+                    else -> item
+                }
+            },
+        )
+    }
+
+    companion object {
+        fun build(spanIds: List<String>, knownSpanIds: Set<String>): StudyPath {
+            var currentSet = false
+            val items = spanIds.map { id ->
+                when {
+                    id in knownSpanIds -> PathItem(id, PathPlacement.SKIPPED)
+                    !currentSet -> {
+                        currentSet = true
+                        PathItem(id, PathPlacement.CURRENT)
+                    }
+                    else -> PathItem(id, PathPlacement.PLANNED)
+                }
+            }
+            return StudyPath(items)
+        }
+
+        fun linearEdges(spanIds: List<String>): List<KnowledgeEdge> =
+            spanIds.zipWithNext { a, b -> KnowledgeEdge(a, b) }
+    }
+}
+
+fun pathPlacementLabel(placement: PathPlacement): String = when (placement) {
+    PathPlacement.PLANNED -> "예정"
+    PathPlacement.SKIPPED -> "건너뜀"
+    PathPlacement.CURRENT -> "오늘"
+    PathPlacement.DETOUR -> "우회"
+}
+
 enum class TutorScope {
     IN_LECTURE,
     OUT_OF_SCOPE,
@@ -173,6 +243,7 @@ data class CourseAsset(
     val course: CourseRef,
     val spans: List<SourceSpan>,
     val tutorPrompts: List<BundledTutorPrompt> = emptyList(),
+    val knowledgeEdges: List<KnowledgeEdge> = emptyList(),
 ) {
     fun span(id: String): SourceSpan? = spans.firstOrNull { it.id == id }
 
@@ -225,7 +296,19 @@ data class CourseAsset(
                     scope = TutorScope.fromJson(p.optString("scope").ifBlank { null }),
                 )
             }
-            return CourseAsset(course, spans, prompts)
+            val edges = mutableListOf<KnowledgeEdge>()
+            val edgesArr = root.optJSONArray("knowledgeEdges")
+            if (edgesArr != null) {
+                for (i in 0 until edgesArr.length()) {
+                    val e = edgesArr.getJSONObject(i)
+                    edges += KnowledgeEdge(
+                        fromSpanId = e.getString("from"),
+                        toSpanId = e.getString("to"),
+                    )
+                }
+            }
+            val resolvedEdges = edges.ifEmpty { StudyPath.linearEdges(spans.map { it.id }) }
+            return CourseAsset(course, spans, prompts, resolvedEdges)
         }
 
         fun loadBundled(): CourseAsset = parse(BundledStudyJson.CS_ALGO_INTRO)
@@ -312,6 +395,10 @@ internal object BundledStudyJson {
           "endSec": 1500,
           "slideLabel": "Asymptotic notation"
         }
+      ],
+      "knowledgeEdges": [
+        {"from": "span-what-is-algo", "to": "span-peak-finding"},
+        {"from": "span-peak-finding", "to": "span-asymptotic"}
       ],
       "tutorPrompts": [
         {

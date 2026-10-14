@@ -107,7 +107,8 @@
 
 - **내용**: 정적 지식 DAG, Advisor 온보딩으로 `skipped`, 막힘 시 `DetourInserted`.
 - **의존**: S7-06
-- **상태**: `todo`
+- **완료 조건**: 온보딩으로 아는 개념이 `skipped`되고, 막힘 시 선수 장면이 `detour`로 끼워진 뒤 `returnToSpanId`로 돌아온다(코어 테스트 + 캔버스 UI).
+- **상태**: `done` — `StudyPath` + 번들 `knowledgeEdges`, iOS/Android 온보딩·경로 줄·막혀요/우회 끝.
 
 ### S7-08 · 세션 종료 + 로컬 `ReviewCard`
 

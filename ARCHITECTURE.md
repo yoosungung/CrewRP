@@ -157,6 +157,15 @@ Worker가 구독하는 Webhook과 앱에 보이는 알림 이름:
 | `placement` | `planned` \| `skipped` \| `current` \| `detour` |
 | `returnToSpanId` | `placement`가 `detour`일 때 돌아갈 장면. 그 외에는 비운다 |
 
+지식 DAG 간선(`KnowledgeEdge`, 강좌 JSON `knowledgeEdges`):
+
+| 필드 | 의미 |
+|------|------|
+| `from` | 선수 `SourceSpan.id` |
+| `to` | 후속 `SourceSpan.id` |
+
+온보딩이 고른 아는 개념은 `skipped`. 활성 장면은 활성 `detour`가 있으면 그 `sourceSpanId`, 없으면 `current`. 막힘(`DetourInserted`)은 `to`=막힌 장면인 간선의 `from`을 `placement=detour`로 끼운다.
+
 ### 7.4 `TutorTurn`
 
 | 필드 | 의미 |

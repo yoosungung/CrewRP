@@ -976,6 +976,8 @@ private struct StudyCanvasView: View {
     var onClose: () -> Void
     @State private var asset: CourseAsset?
     @State private var loadError: String?
+    @State private var knownSpanIds: Set<String> = []
+    @State private var path: StudyPath?
     @State private var ratio: StudySplitRatio = .balanced
     @State private var playURL: String = ""
     @State private var turn: TutorTurn?
@@ -987,31 +989,38 @@ private struct StudyCanvasView: View {
         NavigationStack {
             Group {
                 if let asset {
-                    GeometryReader { geo in
-                        let vertical = studyCanvasStacksVertically(width: geo.size.width, height: geo.size.height)
-                        let mediaFlex = CGFloat(ratio.mediaWeight)
-                        let tutorFlex = CGFloat(ratio.tutorWeight)
-                        let total = mediaFlex + tutorFlex
-                        Group {
-                            if vertical {
-                                VStack(spacing: 0) {
-                                    mediaPane(asset: asset)
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: geo.size.height * (mediaFlex / total) - 18)
-                                    splitHandle
-                                    tutorPane(asset: asset)
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                }
-                            } else {
-                                HStack(spacing: 0) {
-                                    mediaPane(asset: asset)
-                                        .frame(width: geo.size.width * (mediaFlex / total) - 18)
-                                    splitHandle
-                                    tutorPane(asset: asset)
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if let path {
+                        VStack(spacing: 0) {
+                            pathStrip(asset: asset, path: path)
+                            GeometryReader { geo in
+                                let vertical = studyCanvasStacksVertically(width: geo.size.width, height: geo.size.height)
+                                let mediaFlex = CGFloat(ratio.mediaWeight)
+                                let tutorFlex = CGFloat(ratio.tutorWeight)
+                                let total = mediaFlex + tutorFlex
+                                Group {
+                                    if vertical {
+                                        VStack(spacing: 0) {
+                                            mediaPane(asset: asset)
+                                                .frame(maxWidth: .infinity)
+                                                .frame(height: geo.size.height * (mediaFlex / total) - 18)
+                                            splitHandle
+                                            tutorPane(asset: asset, path: path)
+                                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                        }
+                                    } else {
+                                        HStack(spacing: 0) {
+                                            mediaPane(asset: asset)
+                                                .frame(width: geo.size.width * (mediaFlex / total) - 18)
+                                            splitHandle
+                                            tutorPane(asset: asset, path: path)
+                                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                        }
+                                    }
                                 }
                             }
                         }
+                    } else {
+                        onboardingPane(asset: asset)
                     }
                 } else if let loadError {
                     Text(loadError).padding()
@@ -1044,6 +1053,59 @@ private struct StudyCanvasView: View {
         .background(Color(uiColor: .secondarySystemBackground))
     }
 
+    private func onboardingPane(asset: CourseAsset) -> some View {
+        List {
+            Section {
+                Text("이미 아는 개념을 고르면 경로에서 건너뜁니다.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Section("개념") {
+                ForEach(asset.spans, id: \.id) { span in
+                    Button {
+                        if knownSpanIds.contains(span.id) {
+                            knownSpanIds.remove(span.id)
+                        } else {
+                            knownSpanIds.insert(span.id)
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: knownSpanIds.contains(span.id) ? "checkmark.circle.fill" : "circle")
+                            Text(span.concept)
+                            Spacer()
+                        }
+                    }
+                }
+            }
+            Section {
+                Button("첫 주 경로 보기") {
+                    syncToActive(
+                        StudyPath.build(spanIds: asset.spans.map(\.id), knownSpanIds: knownSpanIds),
+                        asset: asset
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.crewInk)
+            }
+        }
+    }
+
+    private func pathStrip(asset: CourseAsset, path: StudyPath) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("경로").font(.caption).foregroundStyle(.secondary)
+            ForEach(Array(path.items.enumerated()), id: \.offset) { _, item in
+                let concept = asset.span(id: item.sourceSpanId)?.concept ?? item.sourceSpanId
+                Text("\(pathPlacementLabel(item.placement)) · \(concept)")
+                    .font(.caption)
+                    .foregroundStyle(item.placement == .current || item.placement == .detour ? Color.crewInk : .secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color(uiColor: .secondarySystemBackground))
+    }
+
     private func mediaPane(asset: CourseAsset) -> some View {
         ZStack {
             Color.black
@@ -1057,8 +1119,9 @@ private struct StudyCanvasView: View {
         // 튜터 UI는 영상 영역 위에 겹치지 않는다(형제 슬롯만 사용).
     }
 
-    private func tutorPane(asset: CourseAsset) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private func tutorPane(asset: CourseAsset, path: StudyPath) -> some View {
+        let onDetour = path.items.contains { $0.placement == .detour }
+        return VStack(alignment: .leading, spacing: 12) {
             if let turn {
                 if let thought = turn.privateThought, !thought.isEmpty {
                     DisclosureGroup("속생각", isExpanded: $thoughtExpanded) {
@@ -1093,16 +1156,28 @@ private struct StudyCanvasView: View {
                     .textFieldStyle(.roundedBorder)
                 Button("힌트") {
                     escalation = min(3, escalation + 1)
-                    reloadTurn(asset: asset)
+                    reloadTurn(asset: asset, path: path)
                 }
                 .buttonStyle(.bordered)
             }
             Button("이 장면 질문") {
                 escalation = 1
-                reloadTurn(asset: asset)
+                reloadTurn(asset: asset, path: path)
             }
             .buttonStyle(.borderedProminent)
             .tint(.crewInk)
+            if onDetour {
+                Button("우회 끝 · 돌아가기") {
+                    syncToActive(path.completeDetour(), asset: asset)
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Button("막혀요 · 앞 장면") {
+                    guard let stuck = path.activeSpanId() else { return }
+                    syncToActive(path.insertDetour(edges: asset.knowledgeEdges, stuckSpanId: stuck), asset: asset)
+                }
+                .buttonStyle(.bordered)
+            }
         }
         .padding()
         .background(Color(uiColor: .systemBackground))
@@ -1110,18 +1185,25 @@ private struct StudyCanvasView: View {
 
     private func load() {
         do {
-            let loaded = try CourseAsset.loadBundled()
-            asset = loaded
-            playURL = loaded.course.playbackUrl
-            escalation = 1
-            turn = try BundledTutorClient(asset: loaded).turn(for: loaded.spans[0].id, escalationStep: 1)
+            asset = try CourseAsset.loadBundled()
         } catch {
             loadError = "강의를 불러오지 못했습니다."
         }
     }
 
-    private func reloadTurn(asset: CourseAsset) {
-        guard let spanId = turn?.sourceSpanId ?? asset.spans.first?.id else { return }
+    private func syncToActive(_ next: StudyPath, asset: CourseAsset) {
+        path = next
+        guard let spanId = next.activeSpanId() else { return }
+        let start = asset.startSec(forCitation: spanId)
+        playURL = embedPlaybackURL(asset.course.playbackUrl, startSec: start)
+        escalation = 1
+        turn = try? BundledTutorClient(asset: asset).turn(for: spanId, escalationStep: 1)
+        draft = ""
+        thoughtExpanded = false
+    }
+
+    private func reloadTurn(asset: CourseAsset, path: StudyPath) {
+        guard let spanId = turn?.sourceSpanId ?? path.activeSpanId() ?? asset.spans.first?.id else { return }
         turn = try? BundledTutorClient(asset: asset).turn(for: spanId, escalationStep: escalation)
     }
 
