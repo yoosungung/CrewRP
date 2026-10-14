@@ -191,8 +191,11 @@ public func taskAssigneeLabel(_ assignees: [String]) -> String? {
     return names.map { "@\($0)" }.joined(separator: ", ")
 }
 
-/// TabView / NavigationBar에서 할 일 탭 인덱스.
+/// TabView 탭 인덱스: 홈·할 일·학습·자료실·소통.
 public let shellTasksTabIndex = 1
+public let shellStudyTabIndex = 2
+public let shellDocsTabIndex = 3
+public let shellTalkTabIndex = 4
 
 public func taskMatching(id: String, in tasks: [TaskCard]) -> TaskCard? {
     tasks.first { $0.id == id }

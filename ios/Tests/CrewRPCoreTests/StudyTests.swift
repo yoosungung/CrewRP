@@ -162,6 +162,71 @@ struct StudyCitationTests {
     }
 }
 
+@Suite("Study batch")
+struct StudyBatchTests {
+    @Test("parseSubtitles reads VTT cues")
+    func parseVtt() {
+        let raw = """
+        WEBVTT
+
+        00:00:00.000 --> 00:00:03.000
+        Hello
+
+        00:00:03.000 --> 00:00:10.000
+        World
+        """
+        let cues = parseSubtitles(raw)
+        #expect(cues.count == 2)
+        #expect(cues[0].text == "Hello")
+        #expect(cues[1].endSec == 10)
+    }
+
+    @Test("buildSourceSpans maps markers")
+    func buildSpans() throws {
+        let cues = [
+            SubtitleCue(startSec: 0, endSec: 10, text: "a"),
+            SubtitleCue(startSec: 10, endSec: 60, text: "b"),
+        ]
+        let markers = [
+            ConceptMarker(concept: "A", startSec: 0, slideLabel: "A"),
+            ConceptMarker(concept: "B", startSec: 10, slideLabel: "B"),
+        ]
+        let spans = try buildSourceSpans(courseId: "demo", markers: markers, cues: cues)
+        #expect(spans.count == 2)
+        #expect(spans[0].id == "demo:span-001")
+        #expect(spans[1].endSec == 60)
+        try assertValidSourceSpans(spans, courseId: "demo")
+    }
+}
+
+@Suite("Study catalog")
+struct StudyCatalogTests {
+    @Test("recent study dedupes")
+    func recent() throws {
+        let cache = try CacheStore(path: ":memory:")
+        _ = try recordRecentStudy(
+            cache: cache,
+            entry: RecentStudyEntry(subjectId: "cs", courseId: "a", title: "A", openedAtEpochSec: 1),
+            max: 2
+        )
+        let recent = try recordRecentStudy(
+            cache: cache,
+            entry: RecentStudyEntry(subjectId: "cs", courseId: "a", title: "A2", openedAtEpochSec: 2),
+            max: 2
+        )
+        #expect(recent.map(\.courseId) == ["a"])
+        #expect(recent[0].title == "A2")
+    }
+
+    @Test("tab indices include study")
+    func tabs() {
+        #expect(shellTasksTabIndex == 1)
+        #expect(shellStudyTabIndex == 2)
+        #expect(shellDocsTabIndex == 3)
+        #expect(shellTalkTabIndex == 4)
+    }
+}
+
 @Suite("Study path")
 struct StudyPathTests {
     @Test("bundled course has static knowledge DAG")

@@ -25,6 +25,10 @@ final class AppModel: ObservableObject {
     @Published var pendingOpenTaskId: String?
     /// 홈 CTA로 연 공부 캔버스.
     @Published var studyPresented = false
+    @Published var studyLaunchAsset: CourseAsset?
+    @Published var studySubjects: [StudySubject] = []
+    @Published var studyCourses: [StudyCourseSummary] = []
+    @Published var studyRecent: [RecentStudyEntry] = []
     @Published var tasks: [TaskCard] = []
     @Published var readme: String = ""
     @Published var docPreview: String = ""
@@ -197,12 +201,146 @@ final class AppModel: ObservableObject {
         docSha = nil
         selectedTab = 0
         pendingOpenTaskId = nil
+        studyPresented = false
+        studyLaunchAsset = nil
+        studySubjects = []
+        studyCourses = []
+        studyRecent = []
         didRegisterPush = false
     }
 
     func openTaskFromHome(_ task: TaskCard) {
         pendingOpenTaskId = task.id
         selectedTab = shellTasksTabIndex
+    }
+
+    func refreshStudyCatalog() async {
+        studyRecent = loadRecentStudy(cache: cache)
+        guard let token = try? tokens.loadAccessToken(), let parts = repoParts else { return }
+        let client = StudyCatalogClient(transport: transport)
+        studySubjects = (try? await client.listSubjects(owner: parts.owner, repo: parts.repo, token: token)) ?? []
+    }
+
+    func loadStudyCourses(subjectId: String) async {
+        guard let token = try? tokens.loadAccessToken(), let parts = repoParts else {
+            studyCourses = []
+            return
+        }
+        let client = StudyCatalogClient(transport: transport)
+        studyCourses = (try? await client.listCourses(
+            owner: parts.owner, repo: parts.repo, subjectId: subjectId, token: token
+        )) ?? []
+    }
+
+    func openStudyCourse(subjectId: String, courseId: String, title: String, bundled: Bool) async {
+        let asset: CourseAsset?
+        if bundled {
+            asset = try? CourseAsset.loadBundled()
+        } else if let token = try? tokens.loadAccessToken(), let parts = repoParts {
+            let client = StudyCatalogClient(transport: transport)
+            asset = (try? await client.loadCourseAsset(
+                owner: parts.owner, repo: parts.repo, subjectId: subjectId, courseId: courseId, token: token
+            )) ?? (try? CourseAsset.loadBundled())
+        } else {
+            asset = try? CourseAsset.loadBundled()
+        }
+        guard let asset else { return }
+        _ = try? recordRecentStudy(
+            cache: cache,
+            entry: RecentStudyEntry(
+                subjectId: subjectId,
+                courseId: courseId,
+                title: title.isEmpty ? asset.course.title : title,
+                openedAtEpochSec: Int64(Date().timeIntervalSince1970)
+            )
+        )
+        studyRecent = loadRecentStudy(cache: cache)
+        studyLaunchAsset = asset
+        studyPresented = true
+    }
+
+    func saveStudySubject(id: String, title: String) async {
+        let sid = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sid.isEmpty, !stitle.isEmpty,
+              let token = try? tokens.loadAccessToken(),
+              let parts = repoParts else { return }
+        do {
+            let client = StudyCatalogClient(transport: transport)
+            let existing = try await client.fetchText(owner: parts.owner, repo: parts.repo, path: subjectsPath(), token: token)
+            var list = try existing.map { try parseSubjectsJSON($0.0) } ?? []
+            if let idx = list.firstIndex(where: { $0.id == sid }) {
+                list[idx] = StudySubject(id: sid, title: stitle)
+            } else {
+                list.append(StudySubject(id: sid, title: stitle))
+            }
+            _ = try await client.putText(
+                owner: parts.owner,
+                repo: parts.repo,
+                path: subjectsPath(),
+                content: try subjectsJSON(list),
+                token: token,
+                sha: existing?.1
+            )
+            studySubjects = list
+            writeError = nil
+        } catch {
+            writeError = "저장하지 못했습니다."
+        }
+    }
+
+    func saveStudyCourse(
+        subjectId: String,
+        courseId: String,
+        title: String,
+        playbackUrl: String,
+        markers: [ConceptMarker],
+        vttText: String
+    ) async {
+        let sid = subjectId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cid = courseId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sid.isEmpty, !cid.isEmpty, !markers.isEmpty,
+              let token = try? tokens.loadAccessToken(),
+              let parts = repoParts else { return }
+        do {
+            let client = StudyCatalogClient(transport: transport)
+            let course = CourseRef(
+                id: cid,
+                title: title.isEmpty ? cid : title,
+                subject: sid,
+                playbackUrl: playbackUrl.isEmpty ? "https://www.youtube.com/embed/HtSuA80QTyo" : playbackUrl
+            )
+            let asset = try buildCourseAssetFromBatch(course: course, markers: markers, subtitleRaw: vttText)
+            let assetPath = courseAssetPath(subjectId: sid, courseId: cid)
+            let existingAsset = try await client.fetchText(owner: parts.owner, repo: parts.repo, path: assetPath, token: token)
+            _ = try await client.putText(
+                owner: parts.owner, repo: parts.repo, path: assetPath,
+                content: try asset.toJSON() + "\n", token: token, sha: existingAsset?.1
+            )
+            let cPath = conceptsPath(subjectId: sid, courseId: cid)
+            let existingConcepts = try await client.fetchText(owner: parts.owner, repo: parts.repo, path: cPath, token: token)
+            _ = try await client.putText(
+                owner: parts.owner, repo: parts.repo, path: cPath,
+                content: try conceptMarkersJSON(markers) + "\n", token: token, sha: existingConcepts?.1
+            )
+            let listPath = coursesPath(subjectId: sid)
+            let existingList = try await client.fetchText(owner: parts.owner, repo: parts.repo, path: listPath, token: token)
+            var courses = try existingList.map { try parseCourseSummariesJSON($0.0) } ?? []
+            let summary = StudyCourseSummary(id: cid, title: course.title)
+            if let idx = courses.firstIndex(where: { $0.id == cid }) {
+                courses[idx] = summary
+            } else {
+                courses.append(summary)
+            }
+            _ = try await client.putText(
+                owner: parts.owner, repo: parts.repo, path: listPath,
+                content: try courseSummariesJSON(courses), token: token, sha: existingList?.1
+            )
+            studyCourses = courses
+            writeError = nil
+        } catch {
+            writeError = "저장하지 못했습니다."
+        }
     }
 
     func refreshHomeData(forceNetwork: Bool = false) async {
@@ -780,17 +918,20 @@ struct RootView: View {
                     TasksTab(model: model)
                         .tabItem { Label("할 일", systemImage: "checklist") }
                         .tag(1)
+                    StudyTab(model: model)
+                        .tabItem { Label("학습", systemImage: "book") }
+                        .tag(shellStudyTabIndex)
                     DocsTab(model: model)
                         .tabItem { Label("자료실", systemImage: "folder") }
-                        .tag(2)
+                        .tag(shellDocsTabIndex)
                     TalkTab(model: model)
                         .tabItem { Label("소통", systemImage: "bubble.left.and.bubble.right") }
-                        .tag(3)
+                        .tag(shellTalkTabIndex)
                 }
                 .tint(.crewInk)
                 .task { await model.refreshHomeData() }
                 .onChange(of: model.selectedTab) { _, tab in
-                    if tab == 3 { model.enterTalk() }
+                    if tab == shellTalkTabIndex { model.enterTalk() }
                 }
             } else if !model.registrableRepos.isEmpty {
                 NavigationStack {
@@ -889,7 +1030,14 @@ private struct HomeTab: View {
                         }
                         Section("공부") {
                             Button {
-                                model.studyPresented = true
+                                model.selectedTab = shellStudyTabIndex
+                                Task {
+                                    if let recent = model.studyRecent.first {
+                                        await model.openStudyCourse(subjectId: recent.subjectId, courseId: recent.courseId, title: recent.title, bundled: false)
+                                    } else {
+                                        await model.openStudyCourse(subjectId: "cs", courseId: "cs-algo-intro-01", title: "번들 수업", bundled: true)
+                                    }
+                                }
                             } label: {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("이어서 할 공부").font(.headline)
@@ -972,8 +1120,112 @@ private struct HomeTab: View {
     }
 }
 
+
+private struct StudyTab: View {
+    @ObservedObject var model: AppModel
+    @State private var selectedSubject: String?
+    @State private var subjectId = ""
+    @State private var subjectTitle = ""
+    @State private var courseId = ""
+    @State private var courseTitle = ""
+    @State private var playbackUrl = ""
+    @State private var markersText = "0\t도입"
+    @State private var vttText = "WEBVTT\n\n00:00:00.000 --> 00:01:00.000\nhello\n"
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("최근 수업") {
+                    if model.studyRecent.isEmpty {
+                        Button("번들 수업으로 시작") {
+                            Task { await model.openStudyCourse(subjectId: "cs", courseId: "cs-algo-intro-01", title: "번들 수업", bundled: true) }
+                        }
+                    } else {
+                        ForEach(model.studyRecent, id: \.courseId) { entry in
+                            Button(entry.title.isEmpty ? entry.courseId : entry.title) {
+                                Task { await model.openStudyCourse(subjectId: entry.subjectId, courseId: entry.courseId, title: entry.title, bundled: false) }
+                            }
+                        }
+                    }
+                }
+                Section("과목 · 수업") {
+                    let subjects = model.studySubjects.isEmpty ? [StudySubject(id: "cs", title: "CS")] : model.studySubjects
+                    ForEach(subjects) { subject in
+                        Button(subject.title) {
+                            selectedSubject = subject.id
+                            Task { await model.loadStudyCourses(subjectId: subject.id) }
+                        }
+                        .foregroundStyle(selectedSubject == subject.id ? Color.crewInk : .primary)
+                    }
+                    if let selectedSubject {
+                        if model.studyCourses.isEmpty {
+                            Button("번들 수업 (폴백)") {
+                                Task { await model.openStudyCourse(subjectId: selectedSubject, courseId: "cs-algo-intro-01", title: "번들 수업", bundled: true) }
+                            }
+                        }
+                        ForEach(model.studyCourses) { course in
+                            Button(course.title) {
+                                Task { await model.openStudyCourse(subjectId: selectedSubject, courseId: course.id, title: course.title, bundled: false) }
+                            }
+                        }
+                    }
+                }
+                if model.session?.teamRole == .admin {
+                    Section("과목 관리") {
+                        TextField("과목 id", text: $subjectId)
+                        TextField("과목 이름", text: $subjectTitle)
+                        Button("과목 저장") {
+                            Task { await model.saveStudySubject(id: subjectId, title: subjectTitle) }
+                        }
+                    }
+                    Section("수업 만들기") {
+                        TextField("과목 id", text: Binding(
+                            get: { selectedSubject ?? subjectId },
+                            set: { selectedSubject = $0 }
+                        ))
+                        TextField("수업 id", text: $courseId)
+                        TextField("수업 제목", text: $courseTitle)
+                        TextField("재생 URL", text: $playbackUrl)
+                        TextField("개념 마커 (초\\t이름)", text: $markersText, axis: .vertical)
+                            .lineLimit(3...6)
+                        TextField("자막 (VTT)", text: $vttText, axis: .vertical)
+                            .lineLimit(4...10)
+                        Button("수업 저장") {
+                            let sid = (selectedSubject ?? subjectId).trimmingCharacters(in: .whitespacesAndNewlines)
+                            let markers: [ConceptMarker] = markersText.split(whereSeparator: \.isNewline).compactMap { line in
+                                let parts = line.split { $0 == "\t" || $0 == "," || $0 == "|" }.map { $0.trimmingCharacters(in: .whitespaces) }
+                                guard parts.count >= 2, let sec = Int(parts[0]) else { return nil }
+                                return ConceptMarker(concept: String(parts[1]), startSec: sec, slideLabel: parts.count > 2 ? String(parts[2]) : "")
+                            }
+                            Task {
+                                await model.saveStudyCourse(
+                                    subjectId: sid,
+                                    courseId: courseId,
+                                    title: courseTitle.isEmpty ? courseId : courseTitle,
+                                    playbackUrl: playbackUrl,
+                                    markers: markers,
+                                    vttText: vttText
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("학습")
+            .task { await model.refreshStudyCatalog() }
+            .fullScreenCover(isPresented: Binding(
+                get: { model.studyLaunchAsset != nil },
+                set: { if !$0 { model.studyLaunchAsset = nil } }
+            )) {
+                StudyCanvasView(onClose: { model.studyLaunchAsset = nil }, initialAsset: model.studyLaunchAsset)
+            }
+        }
+    }
+}
+
 private struct StudyCanvasView: View {
     var onClose: () -> Void
+    var initialAsset: CourseAsset? = nil
     @State private var asset: CourseAsset?
     @State private var loadError: String?
     @State private var knownSpanIds: Set<String> = []
@@ -1185,6 +1437,10 @@ private struct StudyCanvasView: View {
 
     private func load() {
         do {
+            if let initialAsset {
+                asset = initialAsset
+                return
+            }
             asset = try CourseAsset.loadBundled()
         } catch {
             loadError = "강의를 불러오지 못했습니다."
