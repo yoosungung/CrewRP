@@ -44,11 +44,10 @@ public enum StudyBatchError: Error, Equatable {
     case overlap(String)
 }
 
-private let timePattern =
-    #/(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})/#
-
 /// SRT/WebVTT → 시각 큐. 배치 전용.
 public func parseSubtitles(_ raw: String) -> [SubtitleCue] {
+    let timePattern =
+        #/(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})/#
     let cleaned = raw.hasPrefix("\u{FEFF}") ? String(raw.dropFirst()) : raw
     let normalized = cleaned
         .replacingOccurrences(of: "\r\n", with: "\n")

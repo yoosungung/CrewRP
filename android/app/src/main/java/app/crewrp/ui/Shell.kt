@@ -596,7 +596,7 @@ fun CrewShell(
             onDismissRequest = onCloseStudy,
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
-            Surface(Modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 StudyCanvasScreen(initialAsset = studyAsset, onClose = onCloseStudy)
             }
         }

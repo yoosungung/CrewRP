@@ -323,7 +323,8 @@ private struct TutorPromptDTO: Codable {
     var scope: TutorScope?
 }
 
-public struct CourseAsset: Sendable, Equatable {
+public struct CourseAsset: Sendable, Equatable, Identifiable {
+    public var id: String { course.id }
     public var course: CourseRef
     public var spans: [SourceSpan]
     public var tutorPrompts: [BundledTutorPrompt]

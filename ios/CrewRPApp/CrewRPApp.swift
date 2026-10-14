@@ -255,8 +255,17 @@ final class AppModel: ObservableObject {
             )
         )
         studyRecent = loadRecentStudy(cache: cache)
+        presentStudy(asset)
+    }
+
+    func presentStudy(_ asset: CourseAsset) {
         studyLaunchAsset = asset
         studyPresented = true
+    }
+
+    func closeStudy() {
+        studyLaunchAsset = nil
+        studyPresented = false
     }
 
     func saveStudySubject(id: String, title: String) async {
@@ -933,6 +942,15 @@ struct RootView: View {
                 .onChange(of: model.selectedTab) { _, tab in
                     if tab == shellTalkTabIndex { model.enterTalk() }
                 }
+                .fullScreenCover(item: Binding(
+                    get: { model.studyLaunchAsset },
+                    set: { newValue in
+                        model.studyLaunchAsset = newValue
+                        model.studyPresented = newValue != nil
+                    }
+                )) { asset in
+                    StudyCanvasView(onClose: { model.closeStudy() }, initialAsset: asset)
+                }
             } else if !model.registrableRepos.isEmpty {
                 NavigationStack {
                     List(model.registrableRepos) { repo in
@@ -1101,9 +1119,6 @@ private struct HomeTab: View {
                 RefreshButton(model: model)
             }
             .refreshable { await model.refreshHomeData(forceNetwork: true) }
-            .fullScreenCover(isPresented: $model.studyPresented) {
-                StudyCanvasView(onClose: { model.studyPresented = false })
-            }
         }
     }
 
@@ -1143,7 +1158,8 @@ private struct StudyTab: View {
                     } else {
                         ForEach(model.studyRecent, id: \.courseId) { entry in
                             Button(entry.title.isEmpty ? entry.courseId : entry.title) {
-                                Task { await model.openStudyCourse(subjectId: entry.subjectId, courseId: entry.courseId, title: entry.title, bundled: false) }
+                                let bundled = entry.courseId == "cs-algo-intro-01"
+                                Task { await model.openStudyCourse(subjectId: entry.subjectId, courseId: entry.courseId, title: entry.title, bundled: bundled) }
                             }
                         }
                     }
@@ -1213,12 +1229,6 @@ private struct StudyTab: View {
             }
             .navigationTitle("학습")
             .task { await model.refreshStudyCatalog() }
-            .fullScreenCover(isPresented: Binding(
-                get: { model.studyLaunchAsset != nil },
-                set: { if !$0 { model.studyLaunchAsset = nil } }
-            )) {
-                StudyCanvasView(onClose: { model.studyLaunchAsset = nil }, initialAsset: model.studyLaunchAsset)
-            }
         }
     }
 }
@@ -1306,39 +1316,42 @@ private struct StudyCanvasView: View {
     }
 
     private func onboardingPane(asset: CourseAsset) -> some View {
-        List {
-            Section {
-                Text("이미 아는 개념을 고르면 경로에서 건너뜁니다.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Section("개념") {
-                ForEach(asset.spans, id: \.id) { span in
-                    Button {
-                        if knownSpanIds.contains(span.id) {
-                            knownSpanIds.remove(span.id)
-                        } else {
-                            knownSpanIds.insert(span.id)
-                        }
-                    } label: {
-                        HStack {
-                            Image(systemName: knownSpanIds.contains(span.id) ? "checkmark.circle.fill" : "circle")
-                            Text(span.concept)
-                            Spacer()
+        VStack(spacing: 0) {
+            List {
+                Section {
+                    Text("이미 아는 개념을 고르면 경로에서 건너뜁니다.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Section("개념") {
+                    ForEach(asset.spans, id: \.id) { span in
+                        Button {
+                            if knownSpanIds.contains(span.id) {
+                                knownSpanIds.remove(span.id)
+                            } else {
+                                knownSpanIds.insert(span.id)
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: knownSpanIds.contains(span.id) ? "checkmark.circle.fill" : "circle")
+                                Text(span.concept)
+                                Spacer()
+                            }
                         }
                     }
                 }
             }
-            Section {
-                Button("첫 주 경로 보기") {
-                    syncToActive(
-                        StudyPath.build(spanIds: asset.spans.map(\.id), knownSpanIds: knownSpanIds),
-                        asset: asset
-                    )
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.crewInk)
+            Button("첫 주 경로 보기") {
+                syncToActive(
+                    StudyPath.build(spanIds: asset.spans.map(\.id), knownSpanIds: knownSpanIds),
+                    asset: asset
+                )
             }
+            .buttonStyle(.borderedProminent)
+            .tint(.crewInk)
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(Color(uiColor: .systemBackground))
         }
     }
 
