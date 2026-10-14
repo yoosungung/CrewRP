@@ -10,6 +10,13 @@ public struct ConceptMarker: Sendable, Equatable, Codable {
         self.startSec = startSec
         self.slideLabel = slideLabel
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        concept = try c.decode(String.self, forKey: .concept)
+        startSec = try c.decode(Int.self, forKey: .startSec)
+        slideLabel = try c.decodeIfPresent(String.self, forKey: .slideLabel) ?? ""
+    }
 }
 
 public struct SubtitleCue: Sendable, Equatable {
