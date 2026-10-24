@@ -168,7 +168,7 @@
 
 과목 아래 수업은 지금 영상 하나마다 재생 URL을 붙여 초안을 검수한 뒤 저장한다. 바꿀 등록은 공개 YouTube 재생목록 하나를 과목의 수업 목록으로 한 번에 넣는 것이다. 뺀 영상·사이에 끼운 영상은 그 다음 편집에서만 다룬다. 학습 캔버스의 수업 하나는 지금처럼 영상 하나(`CourseRef` + `course.json`)다. 과목과 수업 사이에 이름 있는 과정 계층은 두지 않는다.
 
-착수할 때 [ARCHITECTURE.md](ARCHITECTURE.md) §7과 [docs/study/PRODUCT.md](docs/study/PRODUCT.md) §4.6을 이 절에 맞게 고친 다음 코드를 넣는다. 스키마 초안은 여기 두고, 구현 전 §7을 먼저 바꾸지 않는다.
+착수 커밋에서 [ARCHITECTURE.md](ARCHITECTURE.md) §7과 [docs/study/PRODUCT.md](docs/study/PRODUCT.md) §4.6을 이 절에 맞게 고친 다음 코드를 넣는다. 스키마 초안은 이 절에 둔다.
 
 #### 흐름
 
