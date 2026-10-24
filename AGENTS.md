@@ -37,5 +37,5 @@ This file provides guidance to AI coding assistants (Claude Code, Codex, Gemini,
  
 ## 3. Status
  
-Phase 1–6 그룹웨어 코어·셸 있음(일부 수동 E2E 남음). **Phase 7 공부** S7-01~07·S7-10~14 완료, S7-15(URL→초안 검수) 진행. 카드·한도는 S7-08~09. OAuth/FCM/Discord 실키 E2E는 설정 후.
+Phase 1–6 그룹웨어 코어·셸 있음(일부 수동 E2E 남음). **Phase 7 공부** S7-01~07·S7-10~15 완료. 다음은 재생목록 일괄 등록·수업 목록 편집(S7-16~20, 계획만). 카드·한도는 S7-08~09. OAuth/FCM/Discord 실키 E2E는 설정 후.
 
