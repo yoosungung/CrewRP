@@ -37,6 +37,22 @@ class CrudE2ETest {
         talk.deleteComment(owner, name, created.id, token)
     }
 
+    /** Same ThreadTalkClient path as task detail when issueNumber is present. */
+    @Test
+    fun taskIssueCommentCreateUpdateDelete() {
+        val (owner, name) = partsOrSkip() ?: return
+        val forms = IssueFormsClient(transport)
+        val talk = ThreadTalkClient(transport)
+        val title = "crewrp-e2e-task-${UUID.randomUUID().toString().take(8)}"
+        val issue = forms.createIssue(owner, name, title, "phase6 task comment e2e", token!!)
+        val marker = "crewrp-e2e-${UUID.randomUUID().toString().take(8)}"
+        val created = talk.postComment(owner, name, issue, marker, token)
+        assertEquals(marker, created.body)
+        val edited = talk.updateComment(owner, name, created.id, "$marker-edit", token)
+        assertTrue(edited.body.endsWith("-edit"))
+        talk.deleteComment(owner, name, created.id, token)
+    }
+
     @Test
     fun noticeCreateUpdateDelete() {
         val (owner, name) = partsOrSkip() ?: return
@@ -48,6 +64,28 @@ class CrudE2ETest {
         val edited = discussions.updateNotice(created.id, "$title-edit", "edited", token)
         assertTrue(edited.title.endsWith("-edit"))
         discussions.deleteNotice(created.id, token)
+    }
+
+    @Test
+    fun discussionCommentCreateUpdateDelete() {
+        val (owner, name) = partsOrSkip() ?: return
+        val discussions = DiscussionsClient(transport)
+        val setup = discussions.resolveSetup(owner, name, token!!)
+        val title = "crewrp-e2e-board-${UUID.randomUUID().toString().take(8)}"
+        val notice = discussions.createNotice(
+            setup.repositoryId,
+            setup.categoryId,
+            title,
+            "phase6 board comment e2e",
+            token,
+        )
+        val marker = "crewrp-e2e-${UUID.randomUUID().toString().take(8)}"
+        val created = discussions.addDiscussionComment(notice.id, marker, token)
+        assertEquals(marker, created.body)
+        val edited = discussions.updateDiscussionComment(created.id, "$marker-edit", token)
+        assertTrue(edited.body.endsWith("-edit"))
+        discussions.deleteDiscussionComment(created.id, token)
+        discussions.deleteNotice(notice.id, token)
     }
 
     @Test

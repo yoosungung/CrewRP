@@ -39,16 +39,18 @@ echo "== iOS notice/talk/docs E2E =="
 (
   cd "$ROOT/ios"
   unset CREWRP_E2E_REQUIRE_PROJECT || true
-  swift test --filter 'CrudE2ETests/(notice|talk|docs)'
+  swift test --filter 'CrudE2ETests/(notice|talk|docs|taskIssueComment|discussionComment)'
 )
 
-echo "== Android notice/talk/docs E2E =="
+echo "== Android notice/talk/docs/comment E2E =="
 (
   cd "$ROOT/android"
   unset CREWRP_E2E_REQUIRE_PROJECT || true
   ./gradlew :crewrp-core:test \
     --tests 'app.crewrp.core.CrudE2ETest.noticeCreateUpdateDelete' \
     --tests 'app.crewrp.core.CrudE2ETest.talkCommentCreateUpdateDelete' \
+    --tests 'app.crewrp.core.CrudE2ETest.taskIssueCommentCreateUpdateDelete' \
+    --tests 'app.crewrp.core.CrudE2ETest.discussionCommentCreateUpdateDelete' \
     --tests 'app.crewrp.core.CrudE2ETest.docsMarkdownSaveAndDelete'
 )
 
