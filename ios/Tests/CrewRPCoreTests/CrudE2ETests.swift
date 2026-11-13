@@ -41,6 +41,45 @@ struct CrudE2ETests {
         try await talk.deleteComment(owner: parts.owner, repo: parts.name, commentId: created.id, token: token)
     }
 
+    /// Same ThreadTalkClient path as task detail when `issueNumber` is present.
+    @Test("task issue comment create update delete")
+    func taskIssueCommentRoundTrip() async throws {
+        let token = try #require(E2EEnv.token)
+        let parts = try #require(E2EEnv.parts)
+        let talk = ThreadTalkClient(transport: transport)
+        let title = "crewrp-e2e-task-\(UUID().uuidString.prefix(8))"
+        let issue = try await createIssueNumber(
+            owner: parts.owner, repo: parts.name, title: title, body: "phase6 task comment e2e", token: token
+        )
+        let marker = "crewrp-e2e-\(UUID().uuidString.prefix(8))"
+        let created = try await talk.postComment(
+            owner: parts.owner, repo: parts.name, issueNumber: issue, body: marker, token: token
+        )
+        #expect(created.body == marker)
+        let edited = try await talk.updateComment(
+            owner: parts.owner, repo: parts.name, commentId: created.id, body: "\(marker)-edit", token: token
+        )
+        #expect(edited.body.hasSuffix("-edit"))
+        try await talk.deleteComment(owner: parts.owner, repo: parts.name, commentId: created.id, token: token)
+    }
+
+    private func createIssueNumber(
+        owner: String, repo: String, title: String, body: String, token: String
+    ) async throws -> Int {
+        var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(owner)/\(repo)/issues")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["title": title, "body": body])
+        let (data, response) = try await transport.data(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            throw GitHubAPIError.httpStatus(response.statusCode)
+        }
+        struct IssueDTO: Decodable { let number: Int }
+        return try JSONDecoder().decode(IssueDTO.self, from: data).number
+    }
+
     @Test("notice create update delete")
     func noticeRoundTrip() async throws {
         let token = try #require(E2EEnv.token)
@@ -61,6 +100,33 @@ struct CrudE2ETests {
         )
         #expect(edited.title.hasSuffix("-edit"))
         try await discussions.deleteNotice(id: created.id, token: token)
+    }
+
+    @Test("discussion comment create update delete")
+    func discussionCommentRoundTrip() async throws {
+        let token = try #require(E2EEnv.token)
+        let parts = try #require(E2EEnv.parts)
+        let discussions = DiscussionsClient(transport: transport)
+        let setup = try await discussions.resolveSetup(owner: parts.owner, repo: parts.name, token: token)
+        let title = "crewrp-e2e-board-\(UUID().uuidString.prefix(8))"
+        let notice = try await discussions.createNotice(
+            repositoryId: setup.repositoryId,
+            categoryId: setup.categoryId,
+            title: title,
+            body: "phase6 board comment e2e",
+            token: token
+        )
+        let marker = "crewrp-e2e-\(UUID().uuidString.prefix(8))"
+        let created = try await discussions.addDiscussionComment(
+            discussionId: notice.id, body: marker, token: token
+        )
+        #expect(created.body == marker)
+        let edited = try await discussions.updateDiscussionComment(
+            commentId: created.id, body: "\(marker)-edit", token: token
+        )
+        #expect(edited.body.hasSuffix("-edit"))
+        try await discussions.deleteDiscussionComment(commentId: created.id, token: token)
+        try await discussions.deleteNotice(id: notice.id, token: token)
     }
 
     @Test("docs markdown save and delete")

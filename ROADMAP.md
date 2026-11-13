@@ -54,7 +54,7 @@
 - [x] 할 일 상세에서 Issue comments 목록·작성·수정·삭제 (`ThreadTalkClient`)
 - [x] 게시판 글 상세에서 Discussion comments 목록·작성·수정·삭제 (`DiscussionsClient`)
 - [x] 작성·수정 팝업 제목을 할 일·글·문서 제목(경로 basename)으로 표시
-- [ ] 수동 E2E: 할 일·게시판 글에서 댓글 1회 작성·수정·삭제
+- [x] 수동 E2E: 할 일·게시판 글에서 댓글 1회 작성·수정·삭제
 - 완료 기준: issueNumber 있는 할 일·Discussion 글에서 댓글 CRUD 확인
 
 ## Phase 7 — 공부 (Study, 구 UniTutor)
